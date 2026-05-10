@@ -34,13 +34,13 @@ install:
 	ln -sf $(REPO_DIR)/systemd/dev-agent-server.container   $(QUADLET_DIR)/
 	systemctl --user daemon-reload
 	@echo
-	@echo "Installed to $(QUADLET_DIR). Run: make up"
-	@echo "Auto-start at boot is handled by [Install] WantedBy=default.target in the"
-	@echo ".container files \u2014 no `systemctl --user enable` needed for Quadlet units."
-	@echo "Make sure lingering is on (sudo loginctl enable-linger \$$USER) so user systemd"
-	@echo "survives logout/reboot."
-	@echo "Note: units assume the repo is at ~/dev-agent-server. If it's elsewhere,"
-	@echo "edit %h/dev-agent-server paths in the .container files."
+	@echo 'Installed to $(QUADLET_DIR). Run: make up'
+	@echo 'Auto-start at boot is handled by [Install] WantedBy=default.target in the'
+	@echo '.container files -- no systemctl --user enable needed for Quadlet units.'
+	@echo 'Make sure lingering is on (sudo loginctl enable-linger $$USER) so user systemd'
+	@echo 'survives logout/reboot.'
+	@echo 'Note: units assume the repo is at ~/dev-agent-server. If it is elsewhere,'
+	@echo 'edit %h/dev-agent-server paths in the .container files.'
 
 .PHONY: verify
 verify:
