@@ -121,16 +121,24 @@ the server builds it on demand the first time a session needs it.
 
 ```bash
 make install              # symlinks systemd/*.{network,volume,container} into
-                          #   ~/.config/containers/systemd/
-make reload               # systemctl --user daemon-reload
+                          #   ~/.config/containers/systemd/ and runs daemon-reload
 make up                   # systemctl --user start dev-agent-server.service
 make status               # show service status
 make logs                 # follow server journal (Ctrl-C to stop)
+make verify               # check boot-durability prereqs
 ```
 
 `dev-agent-server.service` pulls in the proxy, the `agent-egress` network,
 and the two volumes via systemd dependencies — there's no need to start them
 individually.
+
+**Auto-start on host reboot is already handled** by the `[Install]
+WantedBy=default.target` sections in each `.container` file: Quadlet's
+generator wires up the necessary symlinks every time `daemon-reload` runs.
+You do **not** need `systemctl --user enable` (and in fact it errors on
+Quadlet-generated units — they live in a generator path that `enable`
+doesn't understand). Just keep lingering on (step 1) and `make verify`
+should show `is-enabled=generated` for both services.
 
 Smoke test:
 
@@ -179,12 +187,12 @@ Then **Zero Trust → Access → Applications → Add application** (Self-hosted
    (`https://<team>.cloudflareaccess.com`). Put `<team>` in `.env` as
    `CF_ACCESS_TEAM_DOMAIN`.
 
-### 6. Lock it down and enable on boot
+### 6. Lock it down
 
 ```bash
 sed -i 's/^DEV_AGENT_TRUST_LOCAL=1/DEV_AGENT_TRUST_LOCAL=0/' .env
 systemctl --user restart dev-agent-server.service
-systemctl --user enable dev-agent-server.service     # auto-start on host boot
+make verify                                          # confirm boot durability
 ```
 
 Visit `https://dev-agent.jackratner.com` from your phone or laptop.
