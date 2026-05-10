@@ -28,7 +28,13 @@ Volume=dev-agent-db.volume:/data/db:Z
 Volume=%t/podman/podman.sock:/var/run/docker.sock:z
 Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
 
-Network=agent-egress.network
+# The server only needs the default external network.
+# It reaches GitHub and Anthropic directly, and reaches the proxy by container
+# name (both are on the podman default network).
+# It does NOT need to be on agent-egress -- it places sandbox containers onto
+# that network via the podman API socket; it doesn't live there itself.
+# (Being on agent-egress caused its DNS to break because that network is
+# internal: true, which strips the upstream resolver.)
 Network=podman
 
 # Cloudflared (running as system service) connects to localhost:3737.
