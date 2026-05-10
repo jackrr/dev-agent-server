@@ -143,8 +143,8 @@ should show `is-enabled=generated` for both services.
 Smoke test:
 
 ```bash
-curl -s http://127.0.0.1:3000/healthz                # → ok
-curl -s http://127.0.0.1:3000/api/project | jq .     # → { name, description, ... }
+curl -s http://127.0.0.1:3737/healthz                # → ok
+curl -s http://127.0.0.1:3737/api/project | jq .     # → { name, description, ... }
 
 # Confirm the server can reach podman via the bind-mounted socket:
 podman exec dev-agent-server docker ps               # lists proxy + server containers
@@ -170,11 +170,11 @@ In the Cloudflare dashboard → **Zero Trust** → **Networks → Tunnels**:
    you (`cloudflared service install <token>`) and run it on the host. This
    installs cloudflared as a *system* (root) service that connects out from
    the host. It does not need access to the rootless podman socket — it just
-   reaches `127.0.0.1:3000`, which the Quadlet unit publishes.
+   reaches `127.0.0.1:3737`, which the Quadlet unit publishes.
 2. Add a **public hostname** to the tunnel:
    - Subdomain: `dev-agent`
    - Domain: `jackratner.com`
-   - Service: `HTTP` → `localhost:3000`
+   - Service: `HTTP` → `localhost:3737`
 
 Then **Zero Trust → Access → Applications → Add application** (Self-hosted):
 

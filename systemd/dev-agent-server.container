@@ -31,8 +31,11 @@ Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
 Network=agent-egress.network
 Network=podman
 
-# Cloudflared (running as system service) connects to localhost:3000.
-PublishPort=127.0.0.1:3000:3000
+# Cloudflared (running as system service) connects to localhost:3737.
+# Container internal port stays 3000 (the server's default); only the host-side
+# published port is 3737. To change, edit just this line and the cloudflared
+# tunnel config -- nothing inside the container needs to change.
+PublishPort=127.0.0.1:3737:3000
 
 [Service]
 Restart=on-failure
