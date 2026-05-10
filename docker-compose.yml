@@ -1,0 +1,69 @@
+# Two services + two networks.
+#
+#  - server:  has access to both networks. Talks to the host container engine
+#             (docker OR podman) via its API socket so it can spawn per-session
+#             sandbox containers.
+#  - proxy:   the only path off-host for the agent_egress network.
+#  - agent_egress (internal): per-session sandbox containers attach here. They
+#             cannot reach the internet directly; only via proxy:8888.
+#  - external: ordinary outbound for server + proxy.
+#
+# Podman + SELinux notes:
+#   * Set CONTAINER_SOCKET in .env to the rootful podman socket
+#     (default: /run/podman/podman.sock). For Docker, use /var/run/docker.sock.
+#   * The :z / :Z suffixes on bind mounts let SELinux relabel them. :Z = private
+#     (only this container); :z = shared. The podman socket uses :z because
+#     other things on the host may also talk to it; seccomp.json uses :Z.
+
+services:
+  server:
+    build: .
+    image: dev-agent-server:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WORKSPACE_DIR: /data/workspaces
+      DATA_DIR: /data/db
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-dev-agent-server_agent_egress}
+      PROXY_URL: http://proxy:8888
+      # docker CLI talks to whatever socket is bound at /var/run/docker.sock
+      DOCKER_HOST: unix:///var/run/docker.sock
+      # Rootless podman: pass through so per-session sandbox containers map
+      # the host UID 1:1 (otherwise files written by the sandbox are owned by
+      # a subuid and the server can't touch them).
+      SANDBOX_USERNS: ${SANDBOX_USERNS:-}
+      SANDBOX_USER: ${SANDBOX_USER:-1000:1000}
+    volumes:
+      - workspaces:/data/workspaces
+      - db:/data/db
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:z
+      - ./sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
+    networks:
+      - external
+      - agent_egress
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+    depends_on:
+      - proxy
+
+  proxy:
+    build: ./proxy
+    image: dev-agent-proxy:latest
+    restart: unless-stopped
+    networks:
+      - external
+      - agent_egress
+    volumes:
+      # The server (or operator) drops the project's allowlist.txt here.
+      - ./proxy/project.txt:/etc/proxy/project.txt:ro,Z
+
+networks:
+  external:
+    driver: bridge
+  agent_egress:
+    driver: bridge
+    internal: true
+
+volumes:
+  workspaces:
+  db:

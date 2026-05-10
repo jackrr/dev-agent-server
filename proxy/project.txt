@@ -1,0 +1,2 @@
+# Project-specific allowlist. Populate from <target-repo>/.dev-agent/allowlist.txt
+# at deploy time. Empty by default.

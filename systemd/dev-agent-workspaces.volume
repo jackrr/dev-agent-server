@@ -1,0 +1,8 @@
+[Unit]
+Description=dev-agent persistent workspaces (git clones + per-session worktrees)
+
+[Volume]
+VolumeName=dev-agent-workspaces
+
+[Install]
+WantedBy=default.target

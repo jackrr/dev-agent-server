@@ -1,0 +1,42 @@
+[Unit]
+Description=dev-agent server (Hono + Claude agent loop)
+Wants=network-online.target
+After=network-online.target
+Requires=dev-agent-proxy.service podman.socket
+After=dev-agent-proxy.service podman.socket
+
+[Container]
+ContainerName=dev-agent-server
+Image=localhost/dev-agent-server:latest
+
+# Secrets + tunables. Keep this file mode 0600.
+EnvironmentFile=%h/dev-agent-server/.env
+
+# Fixed paths inside the container.
+Environment=WORKSPACE_DIR=/data/workspaces
+Environment=DATA_DIR=/data/db
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+Environment=PROXY_URL=http://dev-agent-proxy:8888
+# Quadlet renames the network to systemd-<name>. The server passes this through
+# to per-session sandbox containers it spawns.
+Environment=SANDBOX_NETWORK=systemd-agent-egress
+
+Volume=dev-agent-workspaces.volume:/data/workspaces:Z
+Volume=dev-agent-db.volume:/data/db:Z
+# Rootless podman API socket → docker-compatible socket inside the container.
+# %t = $XDG_RUNTIME_DIR (e.g. /run/user/1000).
+Volume=%t/podman/podman.sock:/var/run/docker.sock:z
+Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
+
+Network=agent-egress.network
+Network=podman
+
+# Cloudflared (running as system service) connects to localhost:3000.
+PublishPort=127.0.0.1:3000:3000
+
+[Service]
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

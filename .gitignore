@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.local
+.envrc
+*.log
+*.swp
+*.tmp
+data/
+workspaces/
+.DS_Store
+
+# Local doc renders (e.g. pandoc output)
+/README.html
+/AGENT_CONTRACTS.html

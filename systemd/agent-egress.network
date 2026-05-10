@@ -1,0 +1,13 @@
+[Unit]
+Description=dev-agent egress-restricted network (sandboxes + proxy + server)
+
+[Network]
+# Internal: containers on this network have no direct route off-host. The
+# proxy is their only path out. The server attaches to this network AND to
+# the default podman network so it can reach the Anthropic / GitHub APIs
+# directly; the proxy attaches to both for the same reason.
+Internal=true
+NetworkName=agent-egress
+
+[Install]
+WantedBy=default.target

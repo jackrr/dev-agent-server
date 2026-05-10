@@ -1,0 +1,11 @@
+# Default egress allowlist for the dev-agent egress proxy.
+# The server merges these with project-specific entries from
+# <main-worktree>/.dev-agent/allowlist.txt at startup.
+api.anthropic.com
+api.github.com
+github.com
+*.githubusercontent.com
+objects.githubusercontent.com
+codeload.github.com
+uploads.github.com
+registry.npmjs.org

@@ -1,0 +1,23 @@
+[Unit]
+Description=dev-agent egress proxy (tinyproxy with allowlist)
+Wants=network-online.target
+After=network-online.target
+Requires=agent-egress-network.service
+After=agent-egress-network.service
+
+[Container]
+ContainerName=dev-agent-proxy
+Image=localhost/dev-agent-proxy:latest
+Network=agent-egress.network
+# The default podman network gives the proxy itself outbound to the allowlisted
+# hosts. Sandbox containers reach the proxy via agent-egress.
+Network=podman
+# %h is $HOME. Adjust if you place the repo elsewhere.
+Volume=%h/dev-agent-server/proxy/project.txt:/etc/proxy/project.txt:ro,Z
+
+[Service]
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
