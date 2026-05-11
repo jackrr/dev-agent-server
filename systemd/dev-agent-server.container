@@ -15,6 +15,13 @@ EnvironmentFile=%h/dev-agent-server/.env
 # Fixed paths inside the container.
 Environment=WORKSPACE_DIR=/data/workspaces
 Environment=DATA_DIR=/data/db
+# Host path for the workspaces volume. The server uses this to translate
+# per-session worktree paths before passing them to podman, because podman
+# (running on the host) can't resolve the in-container path. The default
+# location for a rootless-podman named volume is
+#   $HOME/.local/share/containers/storage/volumes/<name>/_data
+# If you've customized podman's storage, override this.
+Environment=WORKSPACE_DIR_HOST=%h/.local/share/containers/storage/volumes/dev-agent-workspaces/_data
 Environment=DOCKER_HOST=unix:///var/run/docker.sock
 # podman-remote uses CONTAINER_HOST, not DOCKER_HOST. Set both so the server
 # works regardless of which CLI is selected via ENGINE_CLI.

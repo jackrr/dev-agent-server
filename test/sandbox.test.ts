@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseCopySources, hashBuildContext } from "../src/sandbox.js";
+import { parseCopySources, hashBuildContext, translateWorkspacePath } from "../src/sandbox.js";
 
 test("parseCopySources: basic COPY and ADD", () => {
   const out = parseCopySources(`
@@ -72,6 +72,46 @@ test("hashBuildContext: changes when Dockerfile changes even without COPY", () =
   const h2 = hashBuildContext(dockerfile);
   assert.notEqual(h1, h2);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("translateWorkspacePath: returns input when either dir is unset", () => {
+  assert.equal(translateWorkspacePath("/data/workspaces/x", undefined, "/host"), "/data/workspaces/x");
+  assert.equal(translateWorkspacePath("/data/workspaces/x", "/data/workspaces", undefined), "/data/workspaces/x");
+  assert.equal(translateWorkspacePath("/x", undefined, undefined), "/x");
+});
+
+test("translateWorkspacePath: returns input when dirs are identical", () => {
+  assert.equal(translateWorkspacePath("/ws/a", "/ws", "/ws"), "/ws/a");
+});
+
+test("translateWorkspacePath: rewrites prefix", () => {
+  assert.equal(
+    translateWorkspacePath("/data/workspaces/sessions/abc", "/data/workspaces", "/host/vol"),
+    "/host/vol/sessions/abc",
+  );
+});
+
+test("translateWorkspacePath: handles exact match of the root", () => {
+  assert.equal(translateWorkspacePath("/data/workspaces", "/data/workspaces", "/host/vol"), "/host/vol");
+});
+
+test("translateWorkspacePath: tolerates trailing slashes", () => {
+  assert.equal(
+    translateWorkspacePath("/data/workspaces/x", "/data/workspaces/", "/host/vol/"),
+    "/host/vol/x",
+  );
+});
+
+test("translateWorkspacePath: does NOT rewrite paths outside inDir (prefix-match guard)", () => {
+  // /data/workspaces2/... must not match /data/workspaces.
+  assert.equal(
+    translateWorkspacePath("/data/workspaces2/x", "/data/workspaces", "/host/vol"),
+    "/data/workspaces2/x",
+  );
+  assert.equal(
+    translateWorkspacePath("/elsewhere/x", "/data/workspaces", "/host/vol"),
+    "/elsewhere/x",
+  );
 });
 
 test("hashBuildContext: changes when a file inside a COPY'd directory changes", () => {

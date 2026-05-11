@@ -30,6 +30,15 @@ export interface SandboxOpts {
    * runs directly on the host).
    */
   seccompProfileHost?: string;
+  /**
+   * In-server path to the workspace root. Used together with workspaceDirHost
+   * to translate per-session worktree paths from the server's filesystem to
+   * the daemon's filesystem when constructing -v bind mounts. Leave unset if
+   * the server runs directly on the host.
+   */
+  workspaceDir?: string;
+  /** Corresponding path as the engine daemon sees it on the host. */
+  workspaceDirHost?: string;
   fallbackImage: string; // used when no project config present
   /** e.g. "keep-id" for rootless podman; passed as --userns=<value> if set. */
   userns?: string;
@@ -150,7 +159,7 @@ export class SandboxManager {
       "--tmpfs",
       "/home/agent:rw,size=256m",
       "-v",
-      `${args.worktreePath}:/workspace:rw`,
+      `${this.toHostPath(args.worktreePath)}:/workspace:rw`,
       "-w",
       "/workspace",
       "--network",
@@ -261,6 +270,11 @@ export class SandboxManager {
     for (const id of this.containers.keys()) this.destroy(id);
   }
 
+  /** See {@link translateWorkspacePath}. */
+  private toHostPath(p: string): string {
+    return translateWorkspacePath(p, this.opts.workspaceDir, this.opts.workspaceDirHost);
+  }
+
   private runtimeAvailable(name: string): boolean {
     const r = spawnSync(this.cli, ["info", "--format", "{{json .Runtimes}}"], { encoding: "utf8" });
     if (r.status !== 0) return false;
@@ -339,6 +353,24 @@ export function parseCopySources(text: string): string[] {
     }
   }
   return out;
+}
+
+/**
+ * Translates an in-server filesystem path to the corresponding host path the
+ * engine daemon will resolve. If inDir/hostDir aren't both configured, or the
+ * path doesn't live under inDir, returns it unchanged.
+ */
+export function translateWorkspacePath(
+  p: string,
+  inDir: string | undefined,
+  hostDir: string | undefined,
+): string {
+  if (!inDir || !hostDir || inDir === hostDir) return p;
+  const normIn = inDir.endsWith("/") ? inDir : inDir + "/";
+  const normHost = hostDir.replace(/\/$/, "");
+  if (p === inDir) return normHost;
+  if (p.startsWith(normIn)) return normHost + "/" + p.slice(normIn.length);
+  return p;
 }
 
 function tokenize(s: string): string[] {

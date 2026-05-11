@@ -27,6 +27,10 @@ const TARGET_REPO = envRequired("TARGET_REPO");
 const ANTHROPIC_API_KEY = envRequired("ANTHROPIC_API_KEY");
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || path.resolve("./workspaces");
+// Host path corresponding to WORKSPACE_DIR. Only differs when the server runs
+// in a container and the workspace is a named volume (or differently-mounted
+// bind). Used to rewrite paths before passing them to the engine daemon.
+const WORKSPACE_DIR_HOST = process.env.WORKSPACE_DIR_HOST || undefined;
 const DATA_DIR = process.env.DATA_DIR || path.resolve("./data");
 const TRUST_LOCAL = process.env.DEV_AGENT_TRUST_LOCAL === "1";
 const CF_TEAM = process.env.CF_ACCESS_TEAM_DOMAIN || "";
@@ -69,6 +73,8 @@ const sandbox = new SandboxManager({
   githubToken: GITHUB_TOKEN,
   seccompProfile: SECCOMP_PROFILE,
   seccompProfileHost: SECCOMP_PROFILE_HOST,
+  workspaceDir: WORKSPACE_DIR,
+  workspaceDirHost: WORKSPACE_DIR_HOST,
   fallbackImage: FALLBACK_IMAGE,
   userns: process.env.SANDBOX_USERNS || undefined,
   userSpec: process.env.SANDBOX_USER ?? undefined,
