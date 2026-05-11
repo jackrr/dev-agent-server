@@ -60,6 +60,27 @@ export class SandboxManager {
   private preflightDone = new Set<string>();
   private get cli(): string { return this.opts.engineCli || "docker"; }
 
+  /**
+   * Optional debug flags forwarded to the OCI runtime (crun/runc). Enabled by
+   * setting DEBUG_OCI_RUNTIME=1 in the server env; written to the path in
+   * DEBUG_OCI_RUNTIME_LOG (default /tmp/crun.log on the host). Used to capture
+   * the exact failing syscall when container start fails with confusing errors
+   * like `crun: write: No space left on device`.
+   *
+   * Note: this is the path as the *container engine* (host podman) sees it,
+   * not as the server container sees it. The log lives wherever the host's
+   * rootless podman runs, typically the host user's filesystem.
+   */
+  private get runtimeDebugFlags(): string[] {
+    if (!process.env.DEBUG_OCI_RUNTIME) return [];
+    const log = process.env.DEBUG_OCI_RUNTIME_LOG || "/tmp/crun.log";
+    return [
+      "--runtime-flag=debug",
+      `--runtime-flag=log=${log}`,
+      "--runtime-flag=log-format=json",
+    ];
+  }
+
   constructor(private opts: SandboxOpts) {}
 
   /** Resolves the container image to use for a given project config (may build it). */
@@ -157,7 +178,11 @@ export class SandboxManager {
       }
       // Any other state (created/exited/configured/…): discard rather than
       // try to revive — and fall through to a fresh `run`.
-      spawnSync(this.cli, ["rm", "-f", name], { encoding: "utf8" });
+      spawnSync(
+        this.cli,
+        [...this.runtimeDebugFlags, "rm", "-f", name],
+        { encoding: "utf8" },
+      );
     }
 
     const dockerArgs: string[] = [
@@ -212,7 +237,11 @@ export class SandboxManager {
     }
     dockerArgs.push(args.image, "sleep", "infinity");
 
-    const res = spawnSync(this.cli, dockerArgs, { encoding: "utf8" });
+    const res = spawnSync(
+      this.cli,
+      [...this.runtimeDebugFlags, ...dockerArgs],
+      { encoding: "utf8" },
+    );
     if (res.status !== 0) {
       throw new Error(`${this.cli} run failed: ${res.stderr}`);
     }
@@ -239,7 +268,10 @@ export class SandboxManager {
     const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
     return await new Promise((resolve) => {
-      const child = spawn(this.cli, ["exec", id, "bash", "-lc", cmd]);
+      const child = spawn(
+        this.cli,
+        [...this.runtimeDebugFlags, "exec", id, "bash", "-lc", cmd],
+      );
       let stdout = "";
       let stderr = "";
       let truncated = false;
@@ -274,7 +306,7 @@ export class SandboxManager {
   destroy(sessionId: string): void {
     const id = this.containers.get(sessionId);
     if (!id) return;
-    spawnSync(this.cli, ["rm", "-f", id]);
+    spawnSync(this.cli, [...this.runtimeDebugFlags, "rm", "-f", id]);
     this.containers.delete(sessionId);
     this.preflightDone.delete(sessionId);
   }
