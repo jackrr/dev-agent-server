@@ -16,6 +16,13 @@ EnvironmentFile=%h/dev-agent-server/.env
 Environment=WORKSPACE_DIR=/data/workspaces
 Environment=DATA_DIR=/data/db
 Environment=DOCKER_HOST=unix:///var/run/docker.sock
+# podman-remote uses CONTAINER_HOST, not DOCKER_HOST. Set both so the server
+# works regardless of which CLI is selected via ENGINE_CLI.
+Environment=CONTAINER_HOST=unix:///var/run/docker.sock
+# Use the podman CLI inside the container. It accepts the same flags as docker
+# for our use cases AND supports --userns=keep-id (which the docker CLI rejects
+# client-side). Required for rootless podman with SANDBOX_USERNS=keep-id.
+Environment=ENGINE_CLI=podman
 Environment=PROXY_URL=http://dev-agent-proxy:8888
 # Quadlet renames the network to systemd-<name>. The server passes this through
 # to per-session sandbox containers it spawns.

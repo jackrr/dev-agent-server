@@ -68,7 +68,18 @@ const sandbox = new SandboxManager({
   fallbackImage: FALLBACK_IMAGE,
   userns: process.env.SANDBOX_USERNS || undefined,
   userSpec: process.env.SANDBOX_USER ?? undefined,
+  engineCli: process.env.ENGINE_CLI || undefined,
+  imageMaxAgeDays: process.env.SANDBOX_IMAGE_MAX_AGE_DAYS
+    ? Number(process.env.SANDBOX_IMAGE_MAX_AGE_DAYS)
+    : undefined,
 });
+
+// Prune stale sandbox images on boot and then daily. Best-effort; failures
+// are swallowed inside pruneOldImages so they can't crash the server.
+try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune error:", e); }
+setInterval(() => {
+  try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune error:", e); }
+}, 24 * 60 * 60 * 1000).unref();
 
 const github = GITHUB_TOKEN ? new GitHub(TARGET_REPO, GITHUB_TOKEN) : null;
 

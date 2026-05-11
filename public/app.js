@@ -66,6 +66,7 @@ function renderSessionList() {
 async function openSession(id) {
   state.currentSessionId = id;
   renderSessionList();
+  closeDrawer();
   composeForm.style.display = "flex";
   messagesEl.innerHTML = "";
   const data = await api("GET", `/sessions/${id}`);
@@ -233,6 +234,15 @@ async function streamMessage(sessionId, content) {
     }
   }
 }
+
+// ---- mobile drawer ----
+function openDrawer() { document.body.classList.add("drawer-open"); }
+function closeDrawer() { document.body.classList.remove("drawer-open"); }
+$("menu-toggle").onclick = () => {
+  if (document.body.classList.contains("drawer-open")) closeDrawer();
+  else openDrawer();
+};
+$("scrim").onclick = closeDrawer;
 
 // ---- new session modal ----
 $("new-session-btn").onclick = () => {
