@@ -255,21 +255,43 @@ app.route("/api", api);
 // Static UI.
 const publicDir = path.resolve("./public");
 if (fs.existsSync(publicDir)) {
-  // no-cache: forces the browser to revalidate every load (it'll get a fast
-  // 304 if unchanged). Without this, mobile browsers (esp. iOS Safari) cache
-  // these aggressively and won't pick up UI changes until manual hard-reload.
-  const noCache = { "cache-control": "no-cache, must-revalidate" };
+  const appJsPath = path.join(publicDir, "app.js");
+  const indexHtmlPath = path.join(publicDir, "index.html");
+
+  /**
+   * Content-hash of app.js. Rewriting the <script src="/app.js?v=HASH"> in
+   * index.html guarantees browsers fetch the new JS whenever its content
+   * changes — even past aggressive mobile caches — and never re-fetch when
+   * nothing changed. Re-read per-request so `npm run dev` (no server restart)
+   * still picks up edits to public/. Cost: one sha256 over a small file.
+   */
+  function readAppJs(): { body: string; version: string } {
+    const body = fs.readFileSync(appJsPath, "utf8");
+    const version = crypto.createHash("sha256").update(body).digest("hex").slice(0, 12);
+    return { body, version };
+  }
+
   app.get("/", (c) => {
-    const html = fs.readFileSync(path.join(publicDir, "index.html"), "utf8");
-    return c.html(html, 200, noCache);
+    const { version } = readAppJs();
+    const html = fs.readFileSync(indexHtmlPath, "utf8").replace(
+      /(<script[^>]*\bsrc=["']\/app\.js)(\?[^"']*)?(["'])/,
+      `$1?v=${version}$3`,
+    );
+    // no-cache on HTML so the latest ?v= hash always reaches the client.
+    return c.html(html, 200, { "cache-control": "no-cache, must-revalidate" });
   });
   app.use(
     "/static/*",
     serveStatic({ root: "./public", rewriteRequestPath: (p) => p.replace(/^\/static/, "") }),
   );
   app.get("/app.js", (c) => {
-    const js = fs.readFileSync(path.join(publicDir, "app.js"), "utf8");
-    return c.body(js, 200, { "content-type": "application/javascript", ...noCache });
+    const { body, version } = readAppJs();
+    return c.body(body, 200, {
+      "content-type": "application/javascript",
+      // Long-lived cache is safe because the URL changes when content changes.
+      "cache-control": "public, max-age=31536000, immutable",
+      etag: `"${version}"`,
+    });
   });
 }
 
