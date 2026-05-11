@@ -142,6 +142,9 @@ api.post("/sessions", async (c) => {
     deriveTitle(parsed?.description) ||
     `Session ${sessionId.slice(0, 8)}`;
 
+  // Ensure the main clone is up to date before creating the worktree.
+  workspace.ensureMainClone();
+
   // Create the worktree.
   let worktreePath: string;
   if (projectConfig?.ship) {
