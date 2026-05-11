@@ -137,20 +137,27 @@ export class SandboxManager {
     if (existing) return existing;
 
     const name = `dev-agent-${args.sessionId}`;
-    // Try to attach to a previously-started container if it survived a server restart.
-    const inspect = spawnSync(this.cli, ["inspect", "-f", "{{.Id}}", name], { encoding: "utf8" });
+    // Try to attach to a previously-started container if it survived a server
+    // restart. Only reuse it if it's actually still running — attempting to
+    // `podman start` an exited container whose runtime state (under
+    // /run/user/$UID) has been wiped (e.g. host reboot, server container
+    // restart) reliably fails with confusing errors like
+    // `crun: write: No space left on device`. The session's worktree is
+    // persistent on disk, so recreating the container is cheap and correct.
+    const inspect = spawnSync(
+      this.cli,
+      ["inspect", "-f", "{{.Id}} {{.State.Status}}", name],
+      { encoding: "utf8" },
+    );
     if (inspect.status === 0) {
-      const id = inspect.stdout.trim();
-      // Make sure it's running. If start fails the container is in a bad state
-      // (e.g. left half-created by a previous OOM/ENOSPC) — remove it and fall
-      // through to create a fresh one.
-      const start = spawnSync(this.cli, ["start", id], { encoding: "utf8" });
-      if (start.status === 0) {
+      const [id, status] = inspect.stdout.trim().split(/\s+/, 2);
+      if (id && status === "running") {
         this.containers.set(args.sessionId, id);
         return id;
       }
-      console.warn(`[sandbox] container ${id} (${name}) failed to start, removing and recreating: ${start.stderr.trim()}`);
-      spawnSync(this.cli, ["rm", "-f", id], { encoding: "utf8" });
+      // Any other state (created/exited/configured/…): discard rather than
+      // try to revive — and fall through to a fresh `run`.
+      spawnSync(this.cli, ["rm", "-f", name], { encoding: "utf8" });
     }
 
     const dockerArgs: string[] = [
