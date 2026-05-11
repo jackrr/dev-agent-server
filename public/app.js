@@ -238,11 +238,27 @@ async function streamMessage(sessionId, content) {
 // ---- mobile drawer ----
 function openDrawer() { document.body.classList.add("drawer-open"); }
 function closeDrawer() { document.body.classList.remove("drawer-open"); }
-$("menu-toggle").onclick = () => {
+function toggleDrawer(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
   if (document.body.classList.contains("drawer-open")) closeDrawer();
   else openDrawer();
-};
-$("scrim").onclick = closeDrawer;
+}
+{
+  const btn = $("menu-toggle");
+  const scrim = $("scrim");
+  if (btn) {
+    // addEventListener (not .onclick) so nothing else overwrites it, and we
+    // bind both click and touchend in case a mobile browser swallows one.
+    btn.addEventListener("click", toggleDrawer);
+    btn.addEventListener("touchend", toggleDrawer, { passive: false });
+  } else {
+    console.error("[ui] #menu-toggle not found at script load");
+  }
+  if (scrim) {
+    scrim.addEventListener("click", closeDrawer);
+    scrim.addEventListener("touchend", (e) => { e.preventDefault(); closeDrawer(); }, { passive: false });
+  }
+}
 
 // ---- new session modal ----
 $("new-session-btn").onclick = () => {

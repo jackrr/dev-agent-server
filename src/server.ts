@@ -255,9 +255,13 @@ app.route("/api", api);
 // Static UI.
 const publicDir = path.resolve("./public");
 if (fs.existsSync(publicDir)) {
+  // no-cache: forces the browser to revalidate every load (it'll get a fast
+  // 304 if unchanged). Without this, mobile browsers (esp. iOS Safari) cache
+  // these aggressively and won't pick up UI changes until manual hard-reload.
+  const noCache = { "cache-control": "no-cache, must-revalidate" };
   app.get("/", (c) => {
     const html = fs.readFileSync(path.join(publicDir, "index.html"), "utf8");
-    return c.html(html);
+    return c.html(html, 200, noCache);
   });
   app.use(
     "/static/*",
@@ -265,7 +269,7 @@ if (fs.existsSync(publicDir)) {
   );
   app.get("/app.js", (c) => {
     const js = fs.readFileSync(path.join(publicDir, "app.js"), "utf8");
-    return c.body(js, 200, { "content-type": "application/javascript" });
+    return c.body(js, 200, { "content-type": "application/javascript", ...noCache });
   });
 }
 
