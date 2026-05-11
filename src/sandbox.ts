@@ -141,10 +141,16 @@ export class SandboxManager {
     const inspect = spawnSync(this.cli, ["inspect", "-f", "{{.Id}}", name], { encoding: "utf8" });
     if (inspect.status === 0) {
       const id = inspect.stdout.trim();
-      // Make sure it's running.
-      spawnSync(this.cli, ["start", id], { encoding: "utf8" });
-      this.containers.set(args.sessionId, id);
-      return id;
+      // Make sure it's running. If start fails the container is in a bad state
+      // (e.g. left half-created by a previous OOM/ENOSPC) — remove it and fall
+      // through to create a fresh one.
+      const start = spawnSync(this.cli, ["start", id], { encoding: "utf8" });
+      if (start.status === 0) {
+        this.containers.set(args.sessionId, id);
+        return id;
+      }
+      console.warn(`[sandbox] container ${id} (${name}) failed to start, removing and recreating: ${start.stderr.trim()}`);
+      spawnSync(this.cli, ["rm", "-f", id], { encoding: "utf8" });
     }
 
     const dockerArgs: string[] = [
