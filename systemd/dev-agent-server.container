@@ -25,6 +25,10 @@ Volume=dev-agent-workspaces.volume:/data/workspaces:Z
 Volume=dev-agent-db.volume:/data/db:Z
 # Rootless podman API socket → docker-compatible socket inside the container.
 # %t = $XDG_RUNTIME_DIR (e.g. /run/user/1000).
+# SecurityLabelDisable lets the container process connect to the socket without
+# SELinux blocking it — necessary on Fedora where the container label would
+# otherwise be denied access to the relabelled socket file.
+SecurityLabelDisable=true
 Volume=%t/podman/podman.sock:/var/run/docker.sock:z
 Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
 
