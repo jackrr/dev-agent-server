@@ -31,9 +31,11 @@ Environment=CONTAINER_HOST=unix:///var/run/docker.sock
 # client-side). Required for rootless podman with SANDBOX_USERNS=keep-id.
 Environment=ENGINE_CLI=podman
 Environment=PROXY_URL=http://dev-agent-proxy:8888
-# Quadlet renames the network to systemd-<name>. The server passes this through
-# to per-session sandbox containers it spawns.
-Environment=SANDBOX_NETWORK=systemd-agent-egress
+# Network name for per-session sandbox containers. Matches NetworkName= in
+# agent-egress.network. Quadlet only applies the systemd- prefix when
+# NetworkName is NOT set; since we set it explicitly, the name is just
+# agent-egress.
+Environment=SANDBOX_NETWORK=agent-egress
 
 Volume=dev-agent-workspaces.volume:/data/workspaces:Z
 Volume=dev-agent-db.volume:/data/db:Z
