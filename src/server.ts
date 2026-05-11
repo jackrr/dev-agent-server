@@ -35,6 +35,9 @@ const SANDBOX_NETWORK = process.env.SANDBOX_NETWORK || "agent_egress";
 const PROXY_URL = process.env.PROXY_URL || "http://proxy:8888";
 const FALLBACK_IMAGE = process.env.FALLBACK_SANDBOX_IMAGE || "dev-agent/sandbox-base:latest";
 const SECCOMP_PROFILE = process.env.SECCOMP_PROFILE || path.resolve("./sandbox/seccomp.json");
+// Path as the engine (docker/podman daemon on the host) sees it. Only differs
+// from SECCOMP_PROFILE when the server itself runs in a container.
+const SECCOMP_PROFILE_HOST = process.env.SECCOMP_PROFILE_HOST || undefined;
 
 // `ANTHROPIC_API_KEY` is read by the SDK directly; just ensure it's set.
 void ANTHROPIC_API_KEY;
@@ -65,6 +68,7 @@ const sandbox = new SandboxManager({
   proxyUrl: PROXY_URL,
   githubToken: GITHUB_TOKEN,
   seccompProfile: SECCOMP_PROFILE,
+  seccompProfileHost: SECCOMP_PROFILE_HOST,
   fallbackImage: FALLBACK_IMAGE,
   userns: process.env.SANDBOX_USERNS || undefined,
   userSpec: process.env.SANDBOX_USER ?? undefined,

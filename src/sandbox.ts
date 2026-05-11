@@ -17,7 +17,19 @@ export interface SandboxOpts {
   network: string;
   proxyUrl: string;
   githubToken?: string;
-  seccompProfile?: string; // path on host
+  /**
+   * Path on the server's filesystem to the seccomp profile. Used only to decide
+   * whether to apply seccomp at all (file exists → apply). When the server runs
+   * in a container, this is the in-container path.
+   */
+  seccompProfile?: string;
+  /**
+   * Path on the *daemon's* filesystem to the seccomp profile. This is what gets
+   * passed to --security-opt seccomp=... and resolved by docker/podman on the
+   * host. Defaults to seccompProfile (correct for the case where the server
+   * runs directly on the host).
+   */
+  seccompProfileHost?: string;
   fallbackImage: string; // used when no project config present
   /** e.g. "keep-id" for rootless podman; passed as --userns=<value> if set. */
   userns?: string;
@@ -165,7 +177,8 @@ export class SandboxManager {
     if (userSpec) dockerArgs.push("--user", userSpec);
     if (this.opts.userns) dockerArgs.push(`--userns=${this.opts.userns}`);
     if (this.opts.seccompProfile && fs.existsSync(this.opts.seccompProfile)) {
-      dockerArgs.push("--security-opt", `seccomp=${this.opts.seccompProfile}`);
+      const sentToEngine = this.opts.seccompProfileHost ?? this.opts.seccompProfile;
+      dockerArgs.push("--security-opt", `seccomp=${sentToEngine}`);
     }
     // gVisor if available; fall back to runc silently.
     if (this.runtimeAvailable("runsc")) {

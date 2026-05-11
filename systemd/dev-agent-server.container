@@ -37,7 +37,12 @@ Volume=dev-agent-db.volume:/data/db:Z
 # otherwise be denied access to the relabelled socket file.
 SecurityLabelDisable=true
 Volume=%t/podman/podman.sock:/var/run/docker.sock:z
+# The seccomp profile is read by podman on the HOST (not inside the server
+# container), so SECCOMP_PROFILE_HOST must be a host path. We also mount it
+# into the server container so the existence-check in sandbox.ts can find it.
 Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
+Environment=SECCOMP_PROFILE=/app/sandbox/seccomp.json
+Environment=SECCOMP_PROFILE_HOST=%h/dev-agent-server/sandbox/seccomp.json
 
 # The server only needs the default external network.
 # It reaches GitHub and Anthropic directly, and reaches the proxy by container

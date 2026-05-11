@@ -33,6 +33,13 @@ services:
       # a subuid and the server can't touch them).
       SANDBOX_USERNS: ${SANDBOX_USERNS:-}
       SANDBOX_USER: ${SANDBOX_USER:-1000:1000}
+      # In-container path the server uses to decide whether to apply seccomp.
+      SECCOMP_PROFILE: /app/sandbox/seccomp.json
+      # Path passed to docker/podman --security-opt seccomp=... which is
+      # resolved by the engine on the host. Set this to the absolute host path
+      # of the file (compose substitutes ${PWD}). Without this the engine
+      # would try to open the in-container path on the host and fail.
+      SECCOMP_PROFILE_HOST: ${PWD}/sandbox/seccomp.json
     volumes:
       - workspaces:/data/workspaces
       - db:/data/db
