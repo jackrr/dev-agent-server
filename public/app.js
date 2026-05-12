@@ -169,6 +169,14 @@ async function refreshPrBanner() {
 }
 
 // ---- compose ----
+// Desktop UX: Enter submits, Shift+Enter inserts newline.
+composeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    composeForm.requestSubmit();
+  }
+});
+
 composeForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const content = composeInput.value.trim();
