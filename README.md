@@ -29,7 +29,6 @@ sandbox/             # base sandbox image + seccomp profile (fallback only)
 proxy/               # tinyproxy-based egress allowlist proxy
 systemd/             # Quadlet units for Fedora + rootless podman (primary deploy path)
 Makefile             # convenience targets for the Quadlet/systemd path
-docker-compose.yml   # portable fallback for non-systemd hosts (not primary)
 test/                # parser + sandbox unit tests
 ```
 
@@ -260,25 +259,6 @@ If not, `sudo systemctl edit user@.service` and add a delegation drop-in.
 **The first sandbox spawn hangs for a minute.**
 First-time image pull into your user's container storage. Subsequent runs
 are instant.
-
----
-
-## Deploy: portable docker-compose path (fallback)
-
-For non-systemd hosts (or if you just prefer compose). **Not the primary
-path** — the Quadlet units above are the source of truth for production.
-
-```bash
-cp .env.example .env       # edit
-docker compose up -d --build
-docker compose logs -f server
-```
-
-This brings up the same two containers (`server`, `proxy`) on the same two
-networks. Functionally equivalent on Linux; less integrated with the host
-than the Quadlet path. Note: some `.env` defaults (e.g. `SANDBOX_NETWORK`,
-container names) differ between the compose and Quadlet paths — see comments
-in `.env.example`.
 
 ---
 

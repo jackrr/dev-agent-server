@@ -15,8 +15,8 @@ help:
 	@echo "  down         Stop everything"
 	@echo "  status       systemctl --user status of all units"
 	@echo "  verify       Check that the boot-durability prerequisites are in place"
-	@echo "  logs         Follow server journal"
-	@echo "  proxy-logs   Follow proxy journal"
+	@echo "  logs         Follow server + proxy + sandbox journals"
+	@echo "  proxy-logs   Follow proxy journal only"
 
 .PHONY: build
 build:
@@ -83,7 +83,26 @@ status:
 
 .PHONY: logs
 logs:
-	journalctl --user -u dev-agent-server.service -f
+	@# Follow server + proxy + any sandbox container logs in a single stream.
+	@# podman events --filter is noisy; instead we follow the two systemd units
+	@# and spawn a background `podman logs --follow` for every sandbox container
+	@# that appears while we're tailing.
+	@bash -c '\
+		cleanup() { kill 0 2>/dev/null; }; \
+		trap cleanup EXIT; \
+		journalctl --user -u dev-agent-server.service -u dev-agent-proxy.service -f & \
+		SEEN=""; \
+		while true; do \
+			for c in $$(podman ps --filter "name=dev-agent-" --format "{{.Names}}" 2>/dev/null); do \
+				case "$$c" in dev-agent-server|dev-agent-proxy) continue;; esac; \
+				case " $$SEEN " in *" $$c "*) continue;; esac; \
+				SEEN="$$SEEN $$c"; \
+				( podman logs --follow --tail=20 "$$c" 2>&1 | sed "s/^/[$$c] /" ) & \
+			done; \
+			sleep 3; \
+		done & \
+		wait; \
+	'
 
 .PHONY: proxy-logs
 proxy-logs:

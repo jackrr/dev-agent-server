@@ -6,6 +6,8 @@ const messagesEl = $("messages");
 const sessionListEl = $("session-list");
 const composeForm = $("compose");
 const composeInput = $("compose-input");
+const sendBtn = $("send-btn");
+const cancelBtn = $("cancel-btn");
 const prBanner = $("pr-banner");
 const modalBg = $("modal-bg");
 
@@ -182,10 +184,31 @@ composeForm.addEventListener("submit", async (e) => {
   const content = composeInput.value.trim();
   if (!content || !state.currentSessionId) return;
   composeInput.value = "";
+  composeInput.disabled = true;
+  sendBtn.style.display = "none";
+  cancelBtn.style.display = "";
   appendMsg("user", content);
-  await streamMessage(state.currentSessionId, content);
+  try {
+    await streamMessage(state.currentSessionId, content);
+  } finally {
+    composeInput.disabled = false;
+    sendBtn.style.display = "";
+    cancelBtn.style.display = "none";
+  }
   await loadSessions();
   await refreshPrBanner();
+});
+
+cancelBtn.addEventListener("click", async () => {
+  if (!state.currentSessionId) return;
+  cancelBtn.disabled = true;
+  try {
+    await api("POST", `/sessions/${state.currentSessionId}/cancel`);
+  } catch (e) {
+    console.error("cancel failed", e);
+  } finally {
+    cancelBtn.disabled = false;
+  }
 });
 
 async function streamMessage(sessionId, content) {

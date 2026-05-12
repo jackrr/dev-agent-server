@@ -138,6 +138,7 @@ export class Agent {
     sessionId: string;
     history: MessageRow[];
     emit: (e: AgentEvent) => void;
+    signal?: AbortSignal;
   }): Promise<void> {
     const { sessionId, history, emit } = args;
     const session = this.deps.db.getSession(sessionId);
@@ -171,6 +172,10 @@ export class Agent {
     const tools = this.tools();
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      if (args.signal?.aborted) {
+        emit({ type: "error", message: "cancelled by user" });
+        return;
+      }
       const stream = this.anthropic.messages.stream({
         model: MODEL,
         max_tokens: 4096,
@@ -205,6 +210,10 @@ export class Agent {
       // Execute each tool and build a tool_result content array for the next user turn.
       const toolResultBlocks: Anthropic.Messages.ToolResultBlockParam[] = [];
       for (const tu of toolUses) {
+        if (args.signal?.aborted) {
+          emit({ type: "error", message: "cancelled by user" });
+          return;
+        }
         emit({ type: "tool_call", name: tu.name, input: tu.input });
         let outText: string;
         let isError = false;

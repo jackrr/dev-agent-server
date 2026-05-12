@@ -72,10 +72,14 @@ if (projectConfig) {
   console.log("[boot] no .dev-agent/config.yaml — running in generic mode");
 }
 
-// Propagate the project's egress allowlist into the proxy filter file and
-// restart the proxy so tinyproxy re-runs its entrypoint with the new filter.
+// Propagate the project’s egress allowlist into the proxy filter file.
 // Called at boot (unconditionally) and whenever ensureMainClone() reports
 // that HEAD advanced, so the proxy always reflects whatever is on origin/main.
+//
+// If the file content actually changed, we signal tinyproxy to exit and let
+// systemd Restart=on-failure bring the container back with the new filter.
+// We do NOT use `podman restart` because that conflicts with systemd’s
+// Quadlet management and leaves the container with broken networking.
 const ENGINE_CLI = process.env.ENGINE_CLI || "docker";
 const PROXY_CONTAINER = process.env.PROXY_CONTAINER || "dev-agent-proxy";
 
@@ -88,6 +92,15 @@ function syncProxyAllowlist(): void {
   } else {
     console.log("[proxy] no .dev-agent/allowlist.txt — using server defaults only");
   }
+
+  // Check if the file actually changed; skip the disruptive proxy reload if not.
+  let current = "";
+  try { current = fs.readFileSync(PROXY_PROJECT_FILE, "utf8"); } catch {}
+  if (current === extra) {
+    console.log("[proxy] allowlist unchanged — skipping proxy reload");
+    return;
+  }
+
   try {
     fs.mkdirSync(path.dirname(PROXY_PROJECT_FILE), { recursive: true });
     fs.writeFileSync(PROXY_PROJECT_FILE, extra);
@@ -96,17 +109,18 @@ function syncProxyAllowlist(): void {
     console.error(`[proxy] failed to write ${PROXY_PROJECT_FILE}:`, e);
     return;
   }
-  // Restart the proxy so tinyproxy re-runs its entrypoint and rebuilds the
-  // filter from the updated project.txt. The server has access to the engine
-  // socket, so it can restart the proxy container directly.
-  const restart = spawnSync(ENGINE_CLI, ["restart", PROXY_CONTAINER], {
+  // Signal tinyproxy (PID 1) to exit. systemd Restart=on-failure will bring
+  // the container back, re-running the entrypoint with the new filter.
+  // Do NOT use `podman restart` — it conflicts with systemd’s Quadlet
+  // management and leaves the container with broken networking.
+  const kill = spawnSync(ENGINE_CLI, ["kill", "--signal", "TERM", PROXY_CONTAINER], {
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: 10_000,
   });
-  if (restart.status === 0) {
-    console.log(`[proxy] restarted ${PROXY_CONTAINER} to pick up new allowlist`);
+  if (kill.status === 0) {
+    console.log(`[proxy] sent SIGTERM to ${PROXY_CONTAINER}; systemd will restart it`);
   } else {
-    console.error(`[proxy] failed to restart ${PROXY_CONTAINER}: ${restart.stderr}`);
+    console.error(`[proxy] failed to signal ${PROXY_CONTAINER}: ${kill.stderr}`);
   }
 }
 
@@ -146,6 +160,9 @@ const agent = new Agent({
   projectConfig,
   mainWorktree: workspace.mainDir,
 });
+
+// Track active agent turns so they can be cancelled from the UI.
+const activeAborts = new Map<string, AbortController>();
 
 if (projectConfig?.ship && github) {
   const poller = new ArtifactPoller(db, github, projectConfig);
@@ -274,6 +291,17 @@ api.get("/sessions/:id/pr", (c) => {
   });
 });
 
+api.post("/sessions/:id/cancel", (c) => {
+  const id = c.req.param("id");
+  const ac = activeAborts.get(id);
+  if (ac) {
+    ac.abort();
+    activeAborts.delete(id);
+    return c.json({ cancelled: true });
+  }
+  return c.json({ cancelled: false, reason: "no active turn" });
+});
+
 api.post("/sessions/:id/messages", (c) => {
   const id = c.req.param("id");
   const session = db.getSession(id);
@@ -283,6 +311,9 @@ api.post("/sessions/:id/messages", (c) => {
     const send = async (event: string, data: unknown) => {
       await stream.writeSSE({ event, data: JSON.stringify(data) });
     };
+
+    const ac = new AbortController();
+    activeAborts.set(id, ac);
 
     try {
       const body = (await c.req.json()) as { content: string };
@@ -304,9 +335,12 @@ api.post("/sessions/:id/messages", (c) => {
           // Fire-and-forget; SSE writes are async but ordering is preserved within the queue.
           void send(e.type, e);
         },
+        signal: ac.signal,
       });
     } catch (e) {
       await send("error", { message: (e as Error).message });
+    } finally {
+      activeAborts.delete(id);
     }
   });
 });
