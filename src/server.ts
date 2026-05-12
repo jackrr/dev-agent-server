@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -88,23 +87,9 @@ function syncProxyAllowlist(): void {
   try {
     fs.mkdirSync(path.dirname(PROXY_PROJECT_FILE), { recursive: true });
     fs.writeFileSync(PROXY_PROJECT_FILE, extra);
+    console.log(`[proxy] wrote updated allowlist to ${PROXY_PROJECT_FILE}`);
   } catch (e) {
     console.error(`[proxy] failed to write ${PROXY_PROJECT_FILE}:`, e);
-    return;
-  }
-  // Restart the proxy container so tinyproxy re-runs its entrypoint and
-  // picks up the updated filter. The proxy container name follows the compose
-  // convention: <project>-proxy-1. Fall back to "proxy" for local dev.
-  // Best-effort: a failure here is logged but does not abort the server.
-  const proxyContainerName =
-    process.env.PROXY_CONTAINER_NAME ??
-    (process.env.COMPOSE_PROJECT_NAME ? `${process.env.COMPOSE_PROJECT_NAME}-proxy-1` : "proxy");
-  const engineCli = process.env.ENGINE_CLI || "docker";
-  const r = spawnSync(engineCli, ["restart", proxyContainerName], { encoding: "utf8" });
-  if (r.status === 0) {
-    console.log(`[proxy] restarted ${proxyContainerName} with updated allowlist`);
-  } else {
-    console.error(`[proxy] failed to restart ${proxyContainerName}: ${r.stderr.trim()}`);
   }
 }
 
