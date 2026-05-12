@@ -4,8 +4,9 @@ Generic, project-agnostic web server that drives a Claude agent against any
 GitHub repository that ships a `.dev-agent/` directory. One server instance
 drives one target repo; the server itself contains zero project-specific logic.
 
-This is **Component 1** in `AGENT_CONTRACTS.md`. Components 2 (bug-report
-capture) and 3 (CI / artifact build) live inside the target project's repo.
+See `AGENT_CONTRACTS.md` for the cross-repo contracts (shared specs between
+this server and target repos). The current target is
+[musicbox](https://github.com/jackrr/musicbox).
 
 ---
 
@@ -17,7 +18,7 @@ src/
   agent.ts           # Claude agent loop + tool dispatch
   db.ts              # SQLite schema + helpers (better-sqlite3)
   workspace.ts       # git clone + per-session worktrees
-  sandbox.ts         # per-session container manager (docker CLI → podman/docker)
+  sandbox.ts         # per-session container manager (podman-remote or docker CLI)
   github.ts          # gh CLI wrappers (PR creation, release polling)
   poller.ts          # background poll loop for CI-published release artifacts
   project_config.ts  # reads + validates <target>/.dev-agent/config.yaml
@@ -26,9 +27,10 @@ src/
 public/              # vanilla-JS chat UI
 sandbox/             # base sandbox image + seccomp profile (fallback only)
 proxy/               # tinyproxy-based egress allowlist proxy
-systemd/             # Quadlet units (recommended deploy on Fedora)
-docker-compose.yml   # portable fallback for non-systemd hosts
-Makefile             # convenience targets for the systemd path
+systemd/             # Quadlet units for Fedora + rootless podman (primary deploy path)
+Makefile             # convenience targets for the Quadlet/systemd path
+docker-compose.yml   # portable fallback for non-systemd hosts (not primary)
+test/                # parser + sandbox unit tests
 ```
 
 ---
@@ -88,9 +90,10 @@ CF_ACCESS_TEAM_DOMAIN=                               # filled in step 5
 CF_ACCESS_AUD=                                       # filled in step 5
 DEV_AGENT_TRUST_LOCAL=1                              # flip to 0 after step 5
 CONTAINER_SOCKET=/run/user/1000/podman/podman.sock   # adjust if your UID isn't 1000
-SANDBOX_USERNS=keep-id                               # rootless: maps your UID 1:1 into sandboxes
+SANDBOX_USERNS=keep-id:uid=1000,gid=1000             # rootless: maps host user to container uid 1000
 SANDBOX_USER=1000:1000
-SANDBOX_NETWORK=systemd-agent-egress                 # Quadlet prefixes networks with `systemd-`
+ENGINE_CLI=podman                                    # use podman-remote for --userns support
+SANDBOX_NETWORK=agent-egress                         # matches NetworkName in agent-egress.network
 PROXY_URL=http://dev-agent-proxy:8888
 ```
 
@@ -260,9 +263,10 @@ are instant.
 
 ---
 
-## Deploy: portable docker-compose path
+## Deploy: portable docker-compose path (fallback)
 
-For non-systemd hosts (or if you just prefer compose):
+For non-systemd hosts (or if you just prefer compose). **Not the primary
+path** — the Quadlet units above are the source of truth for production.
 
 ```bash
 cp .env.example .env       # edit
@@ -271,8 +275,10 @@ docker compose logs -f server
 ```
 
 This brings up the same two containers (`server`, `proxy`) on the same two
-networks. Functionally equivalent on Linux; less integrated with the host on
-Fedora than the Quadlet path.
+networks. Functionally equivalent on Linux; less integrated with the host
+than the Quadlet path. Note: some `.env` defaults (e.g. `SANDBOX_NETWORK`,
+container names) differ between the compose and Quadlet paths — see comments
+in `.env.example`.
 
 ---
 
@@ -282,22 +288,16 @@ The server reads `<target-repo>/.dev-agent/config.yaml` at boot. If it's
 missing, the server runs in **generic mode**: bash tool only, no `open_pr`,
 no artifact polling. See `AGENT_CONTRACTS.md` for the full schema.
 
-`<target-repo>/.dev-agent/allowlist.txt` (optional) is appended to the proxy
-filter. The deploy mounts `./proxy/project.txt` into the proxy container as
-the project-specific layer; copy your target's allowlist there:
-
-```bash
-cp ../musicbox/.dev-agent/allowlist.txt ./proxy/project.txt
-systemctl --user restart dev-agent-proxy.service
-```
-
-(Only needed once Component 3 has landed in musicbox.)
+`<target-repo>/.dev-agent/allowlist.txt` (optional) is automatically synced
+into the proxy filter at boot and whenever the main clone advances. The
+server writes it to `./proxy/project.txt`, which is bind-mounted into the
+proxy container.
 
 ---
 
 ## REST API
 
-All routes (except `/healthz`) gated by `auth.ts`.
+All `/api/*` routes gated by `auth.ts`. `/healthz` is unauthenticated.
 
 | Method | Path | Description |
 |--------|------|-------------|
