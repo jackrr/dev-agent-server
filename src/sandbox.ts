@@ -179,7 +179,11 @@ export class SandboxManager {
       // under /home/agent, so this cap can stay small.
       "/home/agent:rw,size=256m",
       "-v",
-      `${this.toHostPath(args.worktreePath)}:/workspace:rw`,
+      // :Z asks podman/SELinux to relabel the bind mount with a private MCS
+      // label matching this container's process label. Without it, on Fedora
+      // (SELinux enforcing) the container_t domain is denied access to the
+      // host directory and even reads fail with EACCES.
+      `${this.toHostPath(args.worktreePath)}:/workspace:rw,Z`,
       "-w",
       "/workspace",
       "--network",
