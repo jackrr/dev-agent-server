@@ -25,10 +25,35 @@ export class Workspace {
     fs.mkdirSync(this.sessionsDir, { recursive: true });
   }
 
-  /** Idempotent. Clones TARGET_REPO into <root>/main if it doesn't exist; otherwise fetches. */
+  /**
+   * Idempotent. Clones TARGET_REPO into <root>/main if it doesn't exist;
+   * otherwise fetches AND hard-resets the working tree to the upstream default
+   * branch. The hard reset matters: the main clone's working tree is what the
+   * server reads .dev-agent/config.yaml, Dockerfile.sandbox, agent prompts,
+   * context files, and the allowlist from. Without advancing it, every one of
+   * those files is frozen at whatever commit was checked out on the initial
+   * clone, regardless of how many commits have landed upstream.
+   *
+   * Safe because the main clone is treated as a read-only reference copy:
+   * sessions branch off `origin/<base>` into their own worktrees and never
+   * commit back to main.
+   */
   ensureMainClone(): void {
     if (fs.existsSync(path.join(this.mainDir, ".git"))) {
       this.git(this.mainDir, ["fetch", "--all", "--prune"]);
+      // Refresh origin/HEAD in case the upstream default branch changed.
+      this.git(this.mainDir, ["remote", "set-head", "origin", "--auto"]);
+      const remoteHead = this.git(this.mainDir, [
+        "symbolic-ref",
+        "--short",
+        "refs/remotes/origin/HEAD",
+      ]).stdout.trim(); // e.g. "origin/main"
+      const branch = remoteHead.replace(/^origin\//, "");
+      // -B creates or resets the local branch to point at remoteHead, then
+      // checks it out. Equivalent to `checkout -f <branch> && reset --hard
+      // <remoteHead>` but a single command and tolerant of the branch not
+      // existing locally yet.
+      this.git(this.mainDir, ["checkout", "-B", branch, remoteHead]);
       return;
     }
     fs.mkdirSync(path.dirname(this.mainDir), { recursive: true });
@@ -64,13 +89,16 @@ export class Workspace {
     return wt;
   }
 
-  /** For generic mode: a worktree on a detached HEAD off the default branch. */
+  /** For generic mode: a worktree on a detached HEAD off the upstream default branch. */
   createGenericWorktree(sessionId: string): string {
     const wt = path.join(this.sessionsDir, sessionId);
     if (fs.existsSync(wt)) return wt;
     this.git(this.mainDir, ["fetch", "origin"]);
-    const head = this.git(this.mainDir, ["rev-parse", "HEAD"]).stdout.trim();
-    this.git(this.mainDir, ["worktree", "add", "--detach", wt, head]);
+    // Base off origin/HEAD, not the main clone's local HEAD. The local HEAD is
+    // only advanced by ensureMainClone(); using it here would risk a stale
+    // snapshot if anyone calls this path without going through ensureMainClone
+    // first. origin/HEAD is always the freshly fetched remote ref.
+    this.git(this.mainDir, ["worktree", "add", "--detach", wt, "origin/HEAD"]);
     return wt;
   }
 
