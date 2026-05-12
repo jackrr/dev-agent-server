@@ -204,7 +204,7 @@ export class SandboxManager {
       // copy fails with ENOSPC and crun reports `write: No space left on
       // device`. Toolchains belong under /opt/* in the sandbox image, not
       // under /home/agent, so this cap can stay small.
-      "/home/agent:rw,size=256m",
+      "/home/agent:rw,size=256m,uid=1000,gid=1000",
       "-v",
       // :Z asks podman/SELinux to relabel the bind mount with a private MCS
       // label matching this container's process label. Without it, on Fedora
