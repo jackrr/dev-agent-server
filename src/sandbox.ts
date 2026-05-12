@@ -196,7 +196,7 @@ export class SandboxManager {
       "--read-only",
       "--tmpfs",
       "/tmp:rw,size=512m",
-      "--tmpfs",
+      "--mount",
       // Writable $HOME for caches, dotfiles, lockfiles. MUST be larger than
       // whatever the sandbox image bakes into /home/agent, because the default
       // tmpcopyup mount option copies the underlying directory's contents into
@@ -204,7 +204,10 @@ export class SandboxManager {
       // copy fails with ENOSPC and crun reports `write: No space left on
       // device`. Toolchains belong under /opt/* in the sandbox image, not
       // under /home/agent, so this cap can stay small.
-      "/home/agent:rw,size=256m,uid=1000,gid=1000",
+      // Uses --mount (not --tmpfs) because podman's --tmpfs flag doesn't
+      // support uid/gid options; without them the tmpfs is root-owned and
+      // the uid-1000 container user can't write to $HOME.
+      "type=tmpfs,destination=/home/agent,tmpfs-size=268435456,tmpfs-mode=0755,U=true",
       "-v",
       // :Z asks podman/SELinux to relabel the bind mount with a private MCS
       // label matching this container's process label. Without it, on Fedora
