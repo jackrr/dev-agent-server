@@ -142,10 +142,22 @@ export class SandboxManager {
         ["inspect", "-f", "{{.State.Status}}", existing],
         { encoding: "utf8" },
       );
-      if (check.status === 0 && check.stdout.trim() === "running") {
+      const status = check.status === 0 ? check.stdout.trim() : "unknown";
+      if (status === "running") {
         return existing;
       }
-      // Container died; clean up and fall through to recreate.
+      // Container died; capture logs before removing so we can diagnose.
+      const logs = spawnSync(
+        this.cli,
+        ["logs", "--tail", "50", existing],
+        { encoding: "utf8" },
+      );
+      console.error(
+        `[sandbox] cached container ${existing.slice(0, 12)} for session ` +
+        `${args.sessionId} is ${status}; recreating.\n` +
+        `  stdout: ${(logs.stdout || "").trim()}\n` +
+        `  stderr: ${(logs.stderr || "").trim()}`,
+      );
       spawnSync(this.cli, ["rm", "-f", existing], { encoding: "utf8" });
       this.containers.delete(args.sessionId);
       this.preflightDone.delete(args.sessionId);
@@ -238,11 +250,34 @@ export class SandboxManager {
     }
     dockerArgs.push(args.image, "sleep", "infinity");
 
+    console.log(`[sandbox] creating container ${name} with image ${args.image}`);
     const res = spawnSync(this.cli, dockerArgs, { encoding: "utf8" });
     if (res.status !== 0) {
       throw new Error(`${this.cli} run failed: ${res.stderr}`);
     }
     const id = res.stdout.trim();
+
+    // Give the entrypoint a moment to run, then verify the container is
+    // actually alive. If it exited already, grab its logs before throwing
+    // so the root cause is visible in the server log.
+    spawnSync("sleep", ["1"]);
+    const postCheck = spawnSync(
+      this.cli,
+      ["inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", id],
+      { encoding: "utf8" },
+    );
+    const postStatus = postCheck.status === 0 ? postCheck.stdout.trim() : "inspect-failed";
+    if (!postStatus.startsWith("running")) {
+      const logs = spawnSync(this.cli, ["logs", "--tail", "80", id], { encoding: "utf8" });
+      const detail =
+        `[sandbox] container ${id.slice(0, 12)} exited immediately (${postStatus})\n` +
+        `  stdout: ${(logs.stdout || "").trim()}\n` +
+        `  stderr: ${(logs.stderr || "").trim()}`;
+      console.error(detail);
+      spawnSync(this.cli, ["rm", "-f", id], { encoding: "utf8" });
+      throw new Error(detail);
+    }
+    console.log(`[sandbox] container ${id.slice(0, 12)} is running`);
     this.containers.set(args.sessionId, id);
 
     if (args.preflight && !this.preflightDone.has(args.sessionId)) {
