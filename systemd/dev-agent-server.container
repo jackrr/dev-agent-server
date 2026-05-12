@@ -2,7 +2,8 @@
 Description=dev-agent server (Hono + Claude agent loop)
 Wants=network-online.target
 After=network-online.target
-Requires=dev-agent-proxy.service podman.socket
+Requires=podman.socket
+Wants=dev-agent-proxy.service
 After=dev-agent-proxy.service podman.socket
 
 [Container]
@@ -50,6 +51,10 @@ Volume=%t/podman/podman.sock:/var/run/docker.sock:z
 # container), so SECCOMP_PROFILE_HOST must be a host path. We also mount it
 # into the server container so the existence-check in sandbox.ts can find it.
 Volume=%h/dev-agent-server/sandbox/seccomp.json:/app/sandbox/seccomp.json:ro,Z
+# The proxy's project.txt is bind-mounted here (rw) so the server can update
+# it and then restart the proxy container to pick up the new allowlist.
+Volume=%h/dev-agent-server/proxy/project.txt:/app/proxy/project.txt:rw,Z
+Environment=PROXY_PROJECT_FILE=/app/proxy/project.txt
 Environment=SECCOMP_PROFILE=/app/sandbox/seccomp.json
 Environment=SECCOMP_PROFILE_HOST=%h/dev-agent-server/sandbox/seccomp.json
 

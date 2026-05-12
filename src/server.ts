@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -75,6 +76,9 @@ if (projectConfig) {
 // restart the proxy so tinyproxy re-runs its entrypoint with the new filter.
 // Called at boot (unconditionally) and whenever ensureMainClone() reports
 // that HEAD advanced, so the proxy always reflects whatever is on origin/main.
+const ENGINE_CLI = process.env.ENGINE_CLI || "docker";
+const PROXY_CONTAINER = process.env.PROXY_CONTAINER || "dev-agent-proxy";
+
 function syncProxyAllowlist(): void {
   const projectAllowlist = path.join(workspace.mainDir, ".dev-agent", "allowlist.txt");
   let extra = "";
@@ -90,6 +94,19 @@ function syncProxyAllowlist(): void {
     console.log(`[proxy] wrote updated allowlist to ${PROXY_PROJECT_FILE}`);
   } catch (e) {
     console.error(`[proxy] failed to write ${PROXY_PROJECT_FILE}:`, e);
+    return;
+  }
+  // Restart the proxy so tinyproxy re-runs its entrypoint and rebuilds the
+  // filter from the updated project.txt. The server has access to the engine
+  // socket, so it can restart the proxy container directly.
+  const restart = spawnSync(ENGINE_CLI, ["restart", PROXY_CONTAINER], {
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (restart.status === 0) {
+    console.log(`[proxy] restarted ${PROXY_CONTAINER} to pick up new allowlist`);
+  } else {
+    console.error(`[proxy] failed to restart ${PROXY_CONTAINER}: ${restart.stderr}`);
   }
 }
 
@@ -106,7 +123,7 @@ const sandbox = new SandboxManager({
   fallbackImage: FALLBACK_IMAGE,
   userns: process.env.SANDBOX_USERNS || undefined,
   userSpec: process.env.SANDBOX_USER ?? undefined,
-  engineCli: process.env.ENGINE_CLI || undefined,
+  engineCli: ENGINE_CLI,
   imageMaxAgeDays: process.env.SANDBOX_IMAGE_MAX_AGE_DAYS
     ? Number(process.env.SANDBOX_IMAGE_MAX_AGE_DAYS)
     : undefined,
