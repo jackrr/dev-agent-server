@@ -134,7 +134,22 @@ export class SandboxManager {
     preflight?: string;
   }): Promise<string> {
     const existing = this.containers.get(args.sessionId);
-    if (existing) return existing;
+    if (existing) {
+      // Verify the container is still running — it may have exited (e.g.
+      // entrypoint failure, OOM, tmpfs ENOSPC) since we cached the id.
+      const check = spawnSync(
+        this.cli,
+        ["inspect", "-f", "{{.State.Status}}", existing],
+        { encoding: "utf8" },
+      );
+      if (check.status === 0 && check.stdout.trim() === "running") {
+        return existing;
+      }
+      // Container died; clean up and fall through to recreate.
+      spawnSync(this.cli, ["rm", "-f", existing], { encoding: "utf8" });
+      this.containers.delete(args.sessionId);
+      this.preflightDone.delete(args.sessionId);
+    }
 
     const name = `dev-agent-${args.sessionId}`;
     // Try to attach to a previously-started container if it survived a server
