@@ -37,9 +37,15 @@ export class Workspace {
    * Safe because the main clone is treated as a read-only reference copy:
    * sessions branch off `origin/<base>` into their own worktrees and never
    * commit back to main.
+   *
+   * Returns true if the local HEAD actually moved (i.e. new commits were
+   * fetched and applied), false if it was already up to date or this was a
+   * fresh clone. Callers that need to react to upstream changes (e.g. proxy
+   * allowlist sync) can gate on this return value.
    */
-  ensureMainClone(): void {
+  ensureMainClone(): boolean {
     if (fs.existsSync(path.join(this.mainDir, ".git"))) {
+      const before = this.git(this.mainDir, ["rev-parse", "HEAD"]).stdout.trim();
       this.git(this.mainDir, ["fetch", "--all", "--prune"]);
       // Refresh origin/HEAD in case the upstream default branch changed.
       this.git(this.mainDir, ["remote", "set-head", "origin", "--auto"]);
@@ -54,7 +60,8 @@ export class Workspace {
       // <remoteHead>` but a single command and tolerant of the branch not
       // existing locally yet.
       this.git(this.mainDir, ["checkout", "-B", branch, remoteHead]);
-      return;
+      const after = this.git(this.mainDir, ["rev-parse", "HEAD"]).stdout.trim();
+      return before !== after;
     }
     fs.mkdirSync(path.dirname(this.mainDir), { recursive: true });
     const url = this.cloneUrl();
@@ -62,6 +69,7 @@ export class Workspace {
       stdio: ["ignore", "inherit", "inherit"],
     });
     if (res.status !== 0) throw new Error(`git clone failed (status ${res.status})`);
+    return true; // fresh clone always counts as "advanced"
   }
 
   /**

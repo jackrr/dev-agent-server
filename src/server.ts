@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -37,6 +38,10 @@ const CF_TEAM = process.env.CF_ACCESS_TEAM_DOMAIN || "";
 const CF_AUD = process.env.CF_ACCESS_AUD || "";
 const SANDBOX_NETWORK = process.env.SANDBOX_NETWORK || "agent_egress";
 const PROXY_URL = process.env.PROXY_URL || "http://proxy:8888";
+// Path (on the server's filesystem) to the project.txt that is bind-mounted
+// read-only into the proxy container. The server rewrites this file at boot
+// so the proxy's filter always reflects the project's allowlist.
+const PROXY_PROJECT_FILE = process.env.PROXY_PROJECT_FILE || path.resolve("./proxy/project.txt");
 const FALLBACK_IMAGE = process.env.FALLBACK_SANDBOX_IMAGE || "dev-agent/sandbox-base:latest";
 const SECCOMP_PROFILE = process.env.SECCOMP_PROFILE || path.resolve("./sandbox/seccomp.json");
 // Path as the engine (docker/podman daemon on the host) sees it. Only differs
@@ -58,7 +63,7 @@ const workspace = new Workspace({
 });
 
 console.log(`[boot] cloning/fetching target repo: ${TARGET_REPO}`);
-workspace.ensureMainClone();
+workspace.ensureMainClone(); // return value ignored at boot — always sync below
 
 const projectConfig: ProjectConfig | null = loadProjectConfig(workspace.mainDir);
 if (projectConfig) {
@@ -66,6 +71,44 @@ if (projectConfig) {
 } else {
   console.log("[boot] no .dev-agent/config.yaml — running in generic mode");
 }
+
+// Propagate the project's egress allowlist into the proxy filter file and
+// restart the proxy so tinyproxy re-runs its entrypoint with the new filter.
+// Called at boot (unconditionally) and whenever ensureMainClone() reports
+// that HEAD advanced, so the proxy always reflects whatever is on origin/main.
+function syncProxyAllowlist(): void {
+  const projectAllowlist = path.join(workspace.mainDir, ".dev-agent", "allowlist.txt");
+  let extra = "";
+  if (fs.existsSync(projectAllowlist)) {
+    extra = fs.readFileSync(projectAllowlist, "utf8");
+    console.log(`[proxy] loaded project allowlist from ${projectAllowlist}`);
+  } else {
+    console.log("[proxy] no .dev-agent/allowlist.txt — using server defaults only");
+  }
+  try {
+    fs.mkdirSync(path.dirname(PROXY_PROJECT_FILE), { recursive: true });
+    fs.writeFileSync(PROXY_PROJECT_FILE, extra);
+  } catch (e) {
+    console.error(`[proxy] failed to write ${PROXY_PROJECT_FILE}:`, e);
+    return;
+  }
+  // Restart the proxy container so tinyproxy re-runs its entrypoint and
+  // picks up the updated filter. The proxy container name follows the compose
+  // convention: <project>-proxy-1. Fall back to "proxy" for local dev.
+  // Best-effort: a failure here is logged but does not abort the server.
+  const proxyContainerName =
+    process.env.PROXY_CONTAINER_NAME ??
+    (process.env.COMPOSE_PROJECT_NAME ? `${process.env.COMPOSE_PROJECT_NAME}-proxy-1` : "proxy");
+  const engineCli = process.env.ENGINE_CLI || "docker";
+  const r = spawnSync(engineCli, ["restart", proxyContainerName], { encoding: "utf8" });
+  if (r.status === 0) {
+    console.log(`[proxy] restarted ${proxyContainerName} with updated allowlist`);
+  } else {
+    console.error(`[proxy] failed to restart ${proxyContainerName}: ${r.stderr.trim()}`);
+  }
+}
+
+syncProxyAllowlist(); // always sync on boot regardless of whether HEAD moved
 
 const sandbox = new SandboxManager({
   network: SANDBOX_NETWORK,
@@ -143,7 +186,10 @@ api.post("/sessions", async (c) => {
     `Session ${sessionId.slice(0, 8)}`;
 
   // Ensure the main clone is up to date before creating the worktree.
-  workspace.ensureMainClone();
+  // If HEAD moved, re-sync the proxy allowlist so new sessions benefit from
+  // any updates to .dev-agent/allowlist.txt that landed since server boot.
+  const advanced = workspace.ensureMainClone();
+  if (advanced) syncProxyAllowlist();
 
   // Create the worktree.
   let worktreePath: string;

@@ -68,8 +68,9 @@ services:
       - external
       - agent_egress
     volumes:
-      # The server (or operator) drops the project's allowlist.txt here.
-      - ./proxy/project.txt:/etc/proxy/project.txt:ro,Z
+      # The server writes the project's .dev-agent/allowlist.txt here at boot,
+      # then restarts the proxy so tinyproxy rebuilds its filter. Must be rw.
+      - ./proxy/project.txt:/etc/proxy/project.txt:rw,Z
 
 networks:
   external:
