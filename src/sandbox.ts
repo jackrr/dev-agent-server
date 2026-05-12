@@ -170,16 +170,14 @@ export class SandboxManager {
       "--tmpfs",
       "/tmp:rw,size=512m",
       "--tmpfs",
-      // Sized to comfortably hold a writable $HOME (caches, dotfiles, lockfiles).
-      // MUST be larger than whatever the sandbox image bakes into /home/agent,
-      // because the default tmpcopyup mount option copies the underlying
-      // directory's contents into the tmpfs at mount time; if the existing
-      // content exceeds `size=`, the copy fails with ENOSPC and crun reports
-      // `write: No space left on device`. Toolchains (cargo/rustup/flutter/
-      // android-sdk) should therefore NOT be installed under /home/agent in
-      // the sandbox image — put them under /opt/* and point CARGO_HOME etc.
-      // at the /opt paths.
-      "/home/agent:rw,size=1g",
+      // Writable $HOME for caches, dotfiles, lockfiles. MUST be larger than
+      // whatever the sandbox image bakes into /home/agent, because the default
+      // tmpcopyup mount option copies the underlying directory's contents into
+      // the tmpfs at mount time; if the existing content exceeds `size=`, the
+      // copy fails with ENOSPC and crun reports `write: No space left on
+      // device`. Toolchains belong under /opt/* in the sandbox image, not
+      // under /home/agent, so this cap can stay small.
+      "/home/agent:rw,size=256m",
       "-v",
       `${this.toHostPath(args.worktreePath)}:/workspace:rw`,
       "-w",
