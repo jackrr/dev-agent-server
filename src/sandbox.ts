@@ -131,6 +131,7 @@ export class SandboxManager {
     sessionId: string;
     image: string;
     worktreePath: string;
+    mainGitDir?: string;
     preflight?: string;
   }): Promise<string> {
     const existing = this.containers.get(args.sessionId);
@@ -215,6 +216,18 @@ export class SandboxManager {
       // (SELinux enforcing) the container_t domain is denied access to the
       // host directory and even reads fail with EACCES.
       `${this.toHostPath(args.worktreePath)}:/workspace:rw,Z`,
+    ];
+    // If a mainGitDir is provided, mount it read-only so git worktree
+    // metadata can resolve the commondir / object store. Mounted at
+    // /repo.git; after container start we rewrite /workspace/.git to
+    // point here.
+    if (args.mainGitDir) {
+      dockerArgs.push(
+        "-v",
+        `${this.toHostPath(args.mainGitDir)}:/repo.git:rw,Z`,
+      );
+    }
+    dockerArgs.push(
       "-w",
       "/workspace",
       "--network",
@@ -236,7 +249,7 @@ export class SandboxManager {
       "4g",
       "--pids-limit",
       "512",
-    ];
+    );
     const userSpec = this.opts.userSpec ?? "1000:1000";
     if (userSpec) dockerArgs.push("--user", userSpec);
     if (this.opts.userns) dockerArgs.push(`--userns=${this.opts.userns}`);
@@ -283,6 +296,27 @@ export class SandboxManager {
     }
     console.log(`[sandbox] container ${id.slice(0, 12)} is running`);
     this.containers.set(args.sessionId, id);
+
+    // Fix up git worktree pointers. The worktree's .git file contains an
+    // absolute host path to main/.git/worktrees/<id>, which doesn't exist
+    // inside the container. Rewrite it to /repo.git/worktrees/<id> (the
+    // bind-mount point). Also rewrite the reverse pointer so git can find
+    // the worktree from the repo metadata.
+    if (args.mainGitDir) {
+      const fixup = await this.exec(args.sessionId, [
+        `set -e`,
+        `if [ -f /workspace/.git ]; then`,
+        `  wt_name=$(sed -n 's|.*/worktrees/||p' /workspace/.git)`,
+        `  echo "gitdir: /repo.git/worktrees/$wt_name" > /workspace/.git`,
+        `  echo /workspace/.git > "/repo.git/worktrees/$wt_name/gitdir"`,
+        `  echo "[sandbox] git worktree patched: $wt_name"`,
+        `fi`,
+        `git config --global --add safe.directory /workspace`,
+      ].join("\n"));
+      if (fixup.exitCode !== 0) {
+        console.error(`[sandbox] git fixup failed: ${fixup.stderr}`);
+      }
+    }
 
     if (args.preflight && !this.preflightDone.has(args.sessionId)) {
       const out = await this.exec(args.sessionId, args.preflight);

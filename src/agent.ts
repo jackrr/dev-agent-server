@@ -309,6 +309,7 @@ export class Agent {
       sessionId,
       image,
       worktreePath: session.worktree_path,
+      mainGitDir: path.join(this.deps.mainWorktree, ".git"),
       preflight: this.deps.projectConfig?.agent.preflight,
     });
   }
