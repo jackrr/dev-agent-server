@@ -113,7 +113,17 @@ export class Workspace {
   removeSessionWorktree(sessionId: string): void {
     const wt = path.join(this.sessionsDir, sessionId);
     if (!fs.existsSync(wt)) return;
-    this.git(this.mainDir, ["worktree", "remove", "--force", wt]);
+    try {
+      this.git(this.mainDir, ["worktree", "remove", "--force", wt]);
+    } catch (e) {
+      // The directory exists but git doesn't recognise it as a worktree
+      // (e.g. the worktree metadata was already pruned, or it was created
+      // outside git). Fall back to removing the directory directly.
+      console.error(`[workspace] git worktree remove failed, removing directory manually: ${(e as Error).message}`);
+      fs.rmSync(wt, { recursive: true, force: true });
+      // Also prune stale worktree bookkeeping so git doesn't complain later.
+      try { this.git(this.mainDir, ["worktree", "prune"]); } catch {}
+    }
   }
 
   /** Returns the worktree path; does not create. */
