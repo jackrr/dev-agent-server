@@ -241,6 +241,14 @@ export class DB {
       .all() as PrLinkRow[];
   }
 
+  // ---- delete ----
+  deleteSession(id: string): void {
+    this.db.prepare(`DELETE FROM pr_links WHERE session_id = ?`).run(id);
+    this.db.prepare(`DELETE FROM app_contexts WHERE session_id = ?`).run(id);
+    this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(id);
+    this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+  }
+
   // ---- recent ----
   recentSessions(limit: number): { id: string; title: string; description: string | null }[] {
     return this.db

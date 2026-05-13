@@ -57,9 +57,13 @@ function renderSessionList() {
   for (const s of state.sessions) {
     const div = document.createElement("div");
     div.className = "session" + (s.id === state.currentSessionId ? " active" : "");
-    div.innerHTML = `<div class="title"></div><div class="meta"></div>`;
+    div.innerHTML = `<div class="session-header"><div class="title"></div><button class="delete-btn" title="Delete session">×</button></div><div class="meta"></div>`;
     div.querySelector(".title").textContent = s.title;
     div.querySelector(".meta").textContent = new Date(s.last_message_at || s.created_at).toLocaleString();
+    div.querySelector(".delete-btn").onclick = (e) => {
+      e.stopPropagation();
+      confirmDeleteSession(s.id, s.title);
+    };
     div.onclick = () => openSession(s.id);
     sessionListEl.appendChild(div);
   }
@@ -310,6 +314,25 @@ $("new-submit").onclick = async () => {
   await loadSessions();
   await openSession(created.id);
 };
+
+// ---- delete session ----
+async function confirmDeleteSession(id, title) {
+  if (!confirm(`Delete session "${title}"?\n\nThis removes the session, its worktree, and sandbox container. This cannot be undone.`)) return;
+  try {
+    await api("DELETE", `/sessions/${id}`);
+  } catch (e) {
+    alert(`Failed to delete session: ${e.message}`);
+    return;
+  }
+  if (state.currentSessionId === id) {
+    state.currentSessionId = null;
+    messagesEl.innerHTML = '<div class="empty">Select or create a session to begin.</div>';
+    composeForm.style.display = "none";
+    prBanner.style.display = "none";
+    if (state.prPollTimer) { clearInterval(state.prPollTimer); state.prPollTimer = null; }
+  }
+  await loadSessions();
+}
 
 // ---- boot ----
 loadProject();

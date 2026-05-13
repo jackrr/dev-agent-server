@@ -279,6 +279,30 @@ api.get("/sessions/:id", (c) => {
   return c.json({ session, messages, app_contexts });
 });
 
+api.delete("/sessions/:id", (c) => {
+  const id = c.req.param("id");
+  const session = db.getSession(id);
+  if (!session) return c.json({ error: "not found" }, 404);
+
+  // Cancel any in-flight agent turn.
+  const ac = activeAborts.get(id);
+  if (ac) {
+    ac.abort();
+    activeAborts.delete(id);
+  }
+
+  // Tear down the sandbox container (idempotent).
+  sandbox.destroy(id);
+
+  // Remove the git worktree (idempotent).
+  workspace.removeSessionWorktree(id);
+
+  // Remove from the database.
+  db.deleteSession(id);
+
+  return c.json({ deleted: true });
+});
+
 api.get("/sessions/:id/pr", (c) => {
   const id = c.req.param("id");
   const link = db.getPrLink(id);

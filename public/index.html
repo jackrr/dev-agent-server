@@ -50,7 +50,15 @@
     padding: 10px 12px; border-bottom: 1px solid #1c1f27; cursor: pointer;
   }
   aside .session.active { background: var(--panel-2); }
-  aside .session .title { font-weight: 500; }
+  aside .session .session-header { display: flex; align-items: center; gap: 6px; }
+  aside .session .title { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  aside .session .delete-btn {
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  aside .session:hover .delete-btn { opacity: 1; }
+  aside .session .delete-btn:hover { color: var(--err); }
   aside .session .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
 
   section.chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
