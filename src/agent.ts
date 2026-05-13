@@ -186,7 +186,22 @@ export class Agent {
 
       stream.on("text", (delta) => emit({ type: "token", text: delta }));
 
-      const final = await stream.finalMessage();
+      // Abort the in-flight Anthropic request if the user cancels.
+      const onAbort = () => stream.abort();
+      args.signal?.addEventListener("abort", onAbort, { once: true });
+
+      let final: Anthropic.Messages.Message;
+      try {
+        final = await stream.finalMessage();
+      } catch (e) {
+        if (args.signal?.aborted) {
+          emit({ type: "error", message: "cancelled by user" });
+          return;
+        }
+        throw e;
+      } finally {
+        args.signal?.removeEventListener("abort", onAbort);
+      }
 
       // Persist the assistant message with full content blocks (so tool_use ids are preserved).
       const assistantMsgId = crypto.randomUUID();
@@ -218,7 +233,7 @@ export class Agent {
         let outText: string;
         let isError = false;
         try {
-          outText = await this.dispatchTool(sessionId, tu.name, tu.input);
+          outText = await this.dispatchTool(sessionId, tu.name, tu.input, args.signal);
         } catch (e) {
           outText = `error: ${(e as Error).message}`;
           isError = true;
@@ -250,21 +265,23 @@ export class Agent {
     sessionId: string,
     name: string,
     input: unknown,
+    signal?: AbortSignal,
   ): Promise<string> {
     const args = (input ?? {}) as Record<string, unknown>;
     switch (name) {
       case "bash":
-        return await this.toolBash(sessionId, asString(args.cmd, "cmd"));
+        return await this.toolBash(sessionId, asString(args.cmd, "cmd"), signal);
       case "read_file":
-        return await this.toolReadFile(sessionId, asString(args.path, "path"));
+        return await this.toolReadFile(sessionId, asString(args.path, "path"), signal);
       case "write_file":
         return await this.toolWriteFile(
           sessionId,
           asString(args.path, "path"),
           asString(args.content, "content"),
+          signal,
         );
       case "apply_patch":
-        return await this.toolApplyPatch(sessionId, asString(args.patch, "patch"));
+        return await this.toolApplyPatch(sessionId, asString(args.patch, "patch"), signal);
       case "list_recent_sessions": {
         const limit = Math.max(1, Math.min(50, Number(args.limit ?? 10)));
         const rows = this.deps.db.recentSessions(limit);
@@ -296,9 +313,9 @@ export class Agent {
     });
   }
 
-  private async toolBash(sessionId: string, cmd: string): Promise<string> {
+  private async toolBash(sessionId: string, cmd: string, signal?: AbortSignal): Promise<string> {
     await this.ensureContainer(sessionId);
-    const r = await this.deps.sandbox.exec(sessionId, cmd, { maxBytes: MAX_BASH_BYTES });
+    const r = await this.deps.sandbox.exec(sessionId, cmd, { maxBytes: MAX_BASH_BYTES, signal });
     let out = "";
     if (r.stdout) out += r.stdout;
     if (r.stderr) out += (out ? "\n" : "") + `[stderr]\n${r.stderr}`;
@@ -306,13 +323,14 @@ export class Agent {
     return out;
   }
 
-  private async toolReadFile(sessionId: string, relPath: string): Promise<string> {
+  private async toolReadFile(sessionId: string, relPath: string, signal?: AbortSignal): Promise<string> {
     await this.ensureContainer(sessionId);
     // Just shell out to `cat` inside the sandbox — keeps mount semantics consistent
     // and respects per-container view of the workspace.
     const safe = relPath.replace(/'/g, "'\\''");
     const r = await this.deps.sandbox.exec(sessionId, `cat -- '${safe}'`, {
       maxBytes: MAX_FILE_BYTES,
+      signal,
     });
     if (r.exitCode !== 0) throw new Error(`read_file failed: ${r.stderr.trim() || r.stdout}`);
     return r.stdout;
@@ -322,6 +340,7 @@ export class Agent {
     sessionId: string,
     relPath: string,
     content: string,
+    signal?: AbortSignal,
   ): Promise<string> {
     await this.ensureContainer(sessionId);
     // Stream content via stdin to avoid argv length / quoting limits.
@@ -331,16 +350,16 @@ export class Agent {
     // Encode content as base64 to avoid any quoting issues.
     const b64 = Buffer.from(content, "utf8").toString("base64");
     const cmd = `mkdir -p "$(dirname '${safePath}')" && echo '${b64}' | base64 -d > '${safePath}'`;
-    const r = await this.deps.sandbox.exec(sessionId, cmd);
+    const r = await this.deps.sandbox.exec(sessionId, cmd, { signal });
     if (r.exitCode !== 0) throw new Error(`write_file failed: ${r.stderr.trim() || r.stdout}`);
     return `wrote ${content.length} bytes to ${relPath}`;
   }
 
-  private async toolApplyPatch(sessionId: string, patch: string): Promise<string> {
+  private async toolApplyPatch(sessionId: string, patch: string, signal?: AbortSignal): Promise<string> {
     await this.ensureContainer(sessionId);
     const b64 = Buffer.from(patch, "utf8").toString("base64");
     const cmd = `echo '${b64}' | base64 -d | patch -p1`;
-    const r = await this.deps.sandbox.exec(sessionId, cmd);
+    const r = await this.deps.sandbox.exec(sessionId, cmd, { signal });
     if (r.exitCode !== 0) throw new Error(`patch failed: ${r.stderr.trim() || r.stdout}`);
     return r.stdout;
   }

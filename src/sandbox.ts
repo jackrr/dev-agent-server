@@ -203,11 +203,12 @@ export class SandboxManager {
       // the tmpfs at mount time; if the existing content exceeds `size=`, the
       // copy fails with ENOSPC and crun reports `write: No space left on
       // device`. Toolchains belong under /opt/* in the sandbox image, not
-      // under /home/agent, so this cap can stay small.
+      // under /home/agent. 2 GB is generous but tmpfs only consumes RAM for
+      // pages actually written, so the cost of a large cap is negligible.
       // Uses --mount (not --tmpfs) because podman's --tmpfs flag doesn't
       // support uid/gid options; without them the tmpfs is root-owned and
       // the uid-1000 container user can't write to $HOME.
-      "type=tmpfs,destination=/home/agent,tmpfs-size=268435456,tmpfs-mode=0755,U=true",
+      "type=tmpfs,destination=/home/agent,tmpfs-size=2147483648,tmpfs-mode=0755,U=true",
       "-v",
       // :Z asks podman/SELinux to relabel the bind mount with a private MCS
       // label matching this container's process label. Without it, on Fedora
@@ -295,7 +296,7 @@ export class SandboxManager {
   async exec(
     sessionId: string,
     cmd: string,
-    opts: { maxBytes?: number; timeoutMs?: number } = {},
+    opts: { maxBytes?: number; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<{ stdout: string; stderr: string; exitCode: number; truncated: boolean }> {
     const id = this.containers.get(sessionId);
     if (!id) throw new Error(`no container for session ${sessionId}`);
@@ -327,8 +328,11 @@ export class SandboxManager {
         truncated = true;
         child.kill("SIGKILL");
       }, timeoutMs);
+      const onAbort = () => { child.kill("SIGKILL"); };
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
       child.on("close", (code) => {
         clearTimeout(t);
+        opts.signal?.removeEventListener("abort", onAbort);
         resolve({ stdout, stderr, exitCode: code ?? -1, truncated });
       });
     });
