@@ -12,6 +12,13 @@ Network=agent-egress.network
 # The default podman network gives the proxy itself outbound to the allowlisted
 # hosts. Sandbox containers reach the proxy via agent-egress.
 Network=podman
+# Explicit DNS so the proxy can resolve external hostnames. When on both an
+# internal network (agent-egress) and the default network, podman may pick the
+# internal network's aardvark-dns as primary — which can't forward external
+# queries. The proxy never needs to resolve container names, only external
+# hosts, so a public resolver is correct here.
+DNS=1.1.1.1
+DNS=8.8.8.8
 # %h is $HOME. Adjust if you place the repo elsewhere.
 Volume=%h/dev-agent-server/proxy/project.txt:/etc/proxy/project.txt:ro,Z
 
