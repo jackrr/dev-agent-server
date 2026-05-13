@@ -3,11 +3,17 @@ Description=dev-agent egress-restricted network (sandboxes + proxy + server)
 
 [Network]
 # Internal: containers on this network have no direct route off-host. The
-# proxy is their only path out. The server attaches to this network AND to
-# the default podman network so it can reach the Anthropic / GitHub APIs
-# directly; the proxy attaches to both for the same reason.
+# proxy is their only path out.
 Internal=true
 NetworkName=agent-egress
+Subnet=10.89.100.0/24
+Gateway=10.89.100.1
+# Disable aardvark-dns on this network. Aardvark installs DNAT rules that
+# redirect ALL port-53 traffic (even to 1.1.1.1) to its own resolver, which
+# on an Internal network can't forward external queries. This broke DNS in
+# the proxy container. Sandbox containers don't need DNS — they talk to the
+# proxy by static IP, and the proxy resolves hostnames for them via CONNECT.
+DisableDNS=true
 
 [Install]
 WantedBy=default.target

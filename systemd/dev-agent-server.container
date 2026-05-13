@@ -31,7 +31,10 @@ Environment=CONTAINER_HOST=unix:///var/run/docker.sock
 # for our use cases AND supports --userns=keep-id (which the docker CLI rejects
 # client-side). Required for rootless podman with SANDBOX_USERNS=keep-id.
 Environment=ENGINE_CLI=podman
-Environment=PROXY_URL=http://dev-agent-proxy:8888
+# Use the proxy's static IP on agent-egress (not its container name) because
+# DNS is disabled on agent-egress. This URL is passed to sandbox containers
+# as HTTP(S)_PROXY; the proxy resolves external hostnames on their behalf.
+Environment=PROXY_URL=http://10.89.100.10:8888
 # Network name for per-session sandbox containers. Matches NetworkName= in
 # agent-egress.network. Quadlet only applies the systemd- prefix when
 # NetworkName is NOT set; since we set it explicitly, the name is just

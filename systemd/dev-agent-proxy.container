@@ -14,7 +14,10 @@ Image=localhost/dev-agent-proxy:latest
 # has no external route; if it were first, DNS and HTTPS to the internet
 # would silently black-hole.
 Network=podman
-Network=agent-egress.network
+# Static IP so sandbox containers (which have no DNS on agent-egress) can
+# reach the proxy by address. Must be within the Subnet= defined in
+# agent-egress.network.
+Network=agent-egress.network:ip=10.89.100.10
 # Explicit DNS so the proxy can resolve external hostnames. When on both an
 # internal network (agent-egress) and the default network, podman may pick the
 # internal network's aardvark-dns as primary — which can't forward external
