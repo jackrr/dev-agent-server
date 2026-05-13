@@ -195,7 +195,7 @@ export class SandboxManager {
       "--rm=false",
       "--read-only",
       "--tmpfs",
-      "/tmp:rw,size=512m",
+      "/tmp:rw,size=2g",
       "--mount",
       // Writable $HOME for caches, dotfiles, lockfiles. MUST be larger than
       // whatever the sandbox image bakes into /home/agent, because the default
