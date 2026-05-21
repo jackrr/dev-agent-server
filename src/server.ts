@@ -15,6 +15,7 @@ import { loadProjectConfig, type ProjectConfig } from "./project_config.js";
 import { parseReport } from "./report_parser.js";
 import { cfAccessAuth } from "./auth.js";
 import { ArtifactPoller } from "./poller.js";
+import { buildProvider } from "./llm_provider.js";
 
 // ---------- env ----------
 function envRequired(name: string): string {
@@ -25,7 +26,6 @@ function envRequired(name: string): string {
 
 const PORT = Number(process.env.PORT || 3000);
 const TARGET_REPO = envRequired("TARGET_REPO");
-const ANTHROPIC_API_KEY = envRequired("ANTHROPIC_API_KEY");
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || path.resolve("./workspaces");
 // Host path corresponding to WORKSPACE_DIR. Only differs when the server runs
@@ -47,9 +47,6 @@ const SECCOMP_PROFILE = process.env.SECCOMP_PROFILE || path.resolve("./sandbox/s
 // Path as the engine (docker/podman daemon on the host) sees it. Only differs
 // from SECCOMP_PROFILE when the server itself runs in a container.
 const SECCOMP_PROFILE_HOST = process.env.SECCOMP_PROFILE_HOST || undefined;
-
-// `ANTHROPIC_API_KEY` is read by the SDK directly; just ensure it's set.
-void ANTHROPIC_API_KEY;
 
 // ---------- bootstrap ----------
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -152,6 +149,8 @@ setInterval(() => {
 
 const github = GITHUB_TOKEN ? new GitHub(TARGET_REPO, GITHUB_TOKEN) : null;
 
+const provider = buildProvider();
+
 const agent = new Agent({
   db,
   workspace,
@@ -159,6 +158,7 @@ const agent = new Agent({
   github,
   projectConfig,
   mainWorktree: workspace.mainDir,
+  provider,
 });
 
 // Track active agent turns so they can be cancelled from the UI.

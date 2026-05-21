@@ -7,6 +7,7 @@ import type { ProjectConfig } from "./project_config.js";
 import type { SandboxManager } from "./sandbox.js";
 import type { Workspace } from "./workspace.js";
 import type { GitHub } from "./github.js";
+import type { LLMProvider, LLMResponse } from "./llm_provider.js";
 
 /**
  * Drives a single Claude agent turn (or sequence of turns until the model stops calling tools)
@@ -22,7 +23,6 @@ export type AgentEvent =
 
 const BASE_PROMPT = `You are a software engineer. You are working in a git worktree of the project repository. Your task is to understand the user's report and propose or implement a fix. When \`open_pr\` is available, opening a PR is the only ship mechanism — never push to the base branch directly.`;
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
 const MAX_TOOL_TURNS = 40;
 const MAX_FILE_BYTES = 100 * 1024;
 const MAX_BASH_BYTES = 32 * 1024;
@@ -34,17 +34,14 @@ export interface AgentDeps {
   github: GitHub | null;
   projectConfig: ProjectConfig | null;
   mainWorktree: string;
+  provider: LLMProvider;
 }
 
 export class Agent {
-  private anthropic: Anthropic;
-
-  constructor(private deps: AgentDeps) {
-    this.anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  }
+  constructor(private deps: AgentDeps) {}
 
   /** Builds the system prompt once per session per turn — cheap to recompute. */
-  systemPrompt(session: { id: string }): string {
+  systemPrompt(_session: { id: string }): string {
     const parts: string[] = [BASE_PROMPT];
     const cfg = this.deps.projectConfig;
     if (cfg) {
@@ -176,31 +173,22 @@ export class Agent {
         emit({ type: "error", message: "cancelled by user" });
         return;
       }
-      const stream = this.anthropic.messages.stream({
-        model: MODEL,
-        max_tokens: 4096,
-        system,
-        tools,
-        messages,
-      });
-
-      stream.on("text", (delta) => emit({ type: "token", text: delta }));
-
-      // Abort the in-flight Anthropic request if the user cancels.
-      const onAbort = () => stream.abort();
-      args.signal?.addEventListener("abort", onAbort, { once: true });
-
-      let final: Anthropic.Messages.Message;
+      let llmResponse: LLMResponse;
       try {
-        final = await stream.finalMessage();
+        llmResponse = await this.deps.provider.stream({
+          system,
+          messages,
+          tools,
+          maxTokens: 4096,
+          onToken: (text) => emit({ type: "token", text }),
+          signal: args.signal,
+        });
       } catch (e) {
         if (args.signal?.aborted) {
           emit({ type: "error", message: "cancelled by user" });
           return;
         }
         throw e;
-      } finally {
-        args.signal?.removeEventListener("abort", onAbort);
       }
 
       // Persist the assistant message with full content blocks (so tool_use ids are preserved).
@@ -209,15 +197,15 @@ export class Agent {
         id: assistantMsgId,
         sessionId,
         role: "assistant",
-        content: JSON.stringify(final.content),
+        content: JSON.stringify(llmResponse.content),
       });
-      messages.push({ role: "assistant", content: final.content });
+      messages.push({ role: "assistant", content: llmResponse.content });
 
-      const toolUses = final.content.filter(
+      const toolUses = llmResponse.content.filter(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
       );
 
-      if (toolUses.length === 0 || final.stop_reason === "end_turn") {
+      if (toolUses.length === 0 || llmResponse.stop_reason === "end_turn") {
         emit({ type: "done", messageId: assistantMsgId });
         return;
       }
