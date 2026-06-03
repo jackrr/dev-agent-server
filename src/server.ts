@@ -336,6 +336,12 @@ api.post("/sessions/:id/messages", (c) => {
       await stream.writeSSE({ event, data: JSON.stringify(data) });
     };
 
+    const existingAbort = activeAborts.get(id);
+    if (existingAbort) {
+      existingAbort.abort();
+      activeAborts.delete(id);
+    }
+
     const ac = new AbortController();
     activeAborts.set(id, ac);
 
