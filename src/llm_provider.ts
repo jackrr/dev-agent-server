@@ -218,3 +218,11 @@ export function buildProvider(): LLMProvider {
   console.log(`[llm] provider=anthropic model=${model}`);
   return new AnthropicProvider();
 }
+
+  if (providerType === "openai_compat") {
+    const baseURL = process.env.OPENAI_COMPAT_BASE_URL ?? "http://localhost:8080/v1";
+    const apiKey = process.env.OPENAI_COMPAT_API_KEY ?? "openai-comp";
+    const model = process.env.OPENAI_COMPAT_MODEL ?? "gpt-4o";
+    console.log(`[llm] provider=openai_compat baseURL=${baseURL} model=${model}`);
+    return new OpenAICompatProvider({ baseURL, apiKey, model });
+  }
