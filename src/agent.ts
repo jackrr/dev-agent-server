@@ -10,7 +10,7 @@ import type { GitHub } from "./github.js";
 import type { LLMProvider, LLMResponse } from "./llm_provider.js";
 
 /**
- * Drives a single Claude agent turn (or sequence of turns until the model stops calling tools)
+ * Drives a single LLM agent turn (or sequence of turns until the model stops calling tools)
  * for a given session. Streams events as SSE-friendly objects through a callback.
  */
 
