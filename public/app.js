@@ -233,6 +233,7 @@ async function streamMessage(sessionId, content) {
   let activeTextEl = null;
 
   const handleEvent = (eventName, dataStr) => {
+    if (sessionId !== state.currentSessionId) return;
     let data;
     try { data = JSON.parse(dataStr); } catch { data = { raw: dataStr }; }
     if (eventName === "token") {
