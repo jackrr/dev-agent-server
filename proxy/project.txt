@@ -1,2 +1,29 @@
-# Project-specific allowlist. Populate from <target-repo>/.dev-agent/allowlist.txt
-# at deploy time. Empty by default.
+# Project-specific egress allowlist for the dev-agent sandbox.
+# See AGENT_CONTRACTS.md, Component 1's allowlist section.
+
+# Dart / Flutter package registry
+pub.dev
+storage.googleapis.com
+dl.google.com
+
+# Android / Gradle / Maven
+maven.google.com
+repo.maven.apache.org
+dl.bintray.com
+plugins.gradle.org
+services.gradle.org
+jcenter.bintray.com
+
+# Rust / Cargo
+static.crates.io
+index.crates.io
+crates.io
+sh.rustup.rs
+
+# GitHub (clones, gh CLI, runner registration, releases)
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+ghcr.io
