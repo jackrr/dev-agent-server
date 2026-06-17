@@ -59,7 +59,6 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 COPY --from=build /app/dist ./dist
-COPY public ./public
 COPY sandbox ./sandbox
 
 EXPOSE 3000

@@ -16,21 +16,6 @@ export interface SessionRow {
   worktree_path: string | null;
 }
 
-export interface MessageRow {
-  id: string;
-  session_id: string;
-  role: MessageRole;
-  content: string;
-  created_at: string;
-}
-
-export interface AppContextRow {
-  session_id: string;
-  name: string;
-  content: string;
-  attrs: string | null;
-}
-
 export interface PrLinkRow {
   session_id: string;
   pr_number: number | null;
@@ -50,23 +35,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   description     TEXT,
   device          TEXT,
   worktree_path   TEXT
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id         TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  role       TEXT NOT NULL,
-  content    TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
-
-CREATE TABLE IF NOT EXISTS app_contexts (
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  name       TEXT NOT NULL,
-  content    TEXT NOT NULL,
-  attrs      TEXT,
-  PRIMARY KEY (session_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS pr_links (
@@ -142,63 +110,6 @@ export class DB {
       .run(new Date().toISOString(), id);
   }
 
-  // ---- messages ----
-  appendMessage(row: {
-    id: string;
-    sessionId: string;
-    role: MessageRole;
-    content: string;
-  }): MessageRow {
-    const now = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(row.id, row.sessionId, row.role, row.content, now);
-    this.touchSession(row.sessionId);
-    return {
-      id: row.id,
-      session_id: row.sessionId,
-      role: row.role,
-      content: row.content,
-      created_at: now,
-    };
-  }
-
-  listMessages(sessionId: string): MessageRow[] {
-    return this.db
-      .prepare(`SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC`)
-      .all(sessionId) as MessageRow[];
-  }
-
-  // ---- app_contexts ----
-  putAppContext(
-    sessionId: string,
-    name: string,
-    content: string,
-    attrs: Record<string, string>,
-  ): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO app_contexts (session_id, name, content, attrs)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(sessionId, name, content, JSON.stringify(attrs));
-  }
-
-  listAppContexts(
-    sessionId: string,
-  ): { name: string; content: string; attrs: Record<string, string> }[] {
-    const rows = this.db
-      .prepare(`SELECT name, content, attrs FROM app_contexts WHERE session_id = ?`)
-      .all(sessionId) as { name: string; content: string; attrs: string | null }[];
-    return rows.map((r) => ({
-      name: r.name,
-      content: r.content,
-      attrs: r.attrs ? JSON.parse(r.attrs) : {},
-    }));
-  }
-
   // ---- pr_links ----
   upsertPrLink(row: Partial<PrLinkRow> & { session_id: string }): void {
     const now = new Date().toISOString();
@@ -244,8 +155,6 @@ export class DB {
   // ---- delete ----
   deleteSession(id: string): void {
     this.db.prepare(`DELETE FROM pr_links WHERE session_id = ?`).run(id);
-    this.db.prepare(`DELETE FROM app_contexts WHERE session_id = ?`).run(id);
-    this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(id);
     this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
   }
 
