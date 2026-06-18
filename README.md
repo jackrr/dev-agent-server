@@ -143,16 +143,14 @@ The server exposes the following tools to the MCP Client:
 
 ---
 
-## REST API (Management)
+## REST API
 
-Used for monitoring and cleanup. Requires `x-api-key` header.
+Used for monitoring and system identity. Requires `x-api-key` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/healthz` | unauthenticated liveness probe |
 | GET    | `/api/project` | Get target project configuration |
-| GET    | `/api/sessions` | List all active sessions |
-| DELETE | `/api/sessions/:id` | Destroy session sandbox and worktree |
 
 ---
 

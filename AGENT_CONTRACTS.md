@@ -69,13 +69,11 @@ providing the system prompt and orchestration.
 
 ---
 
-## 3. Server REST API (Management)
+## 3. Server REST API
 
-Used for infrastructure management. Requires `x-api-key` header.
+Used for system identity. Requires `x-api-key` header.
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET    | `/healthz` | liveness probe |
 | GET    | `/api/project` | `{ name, description, shipEnabled, targetRepo }` |
-| GET    | `/api/sessions` | list active sessions |
-| DELETE | `/api/sessions/:id` | destroy session sandbox and worktree |
