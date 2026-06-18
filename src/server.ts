@@ -33,6 +33,8 @@ const SECCOMP_PROFILE = process.env.SECCOMP_PROFILE || path.resolve("./sandbox/s
 const SECCOMP_PROFILE_HOST = process.env.SECCOMP_PROFILE_HOST || undefined;
 const ENGINE_CLI = process.env.ENGINE_CLI || "docker";
 const PROXY_CONTAINER = process.env.PROXY_CONTAINER || "dev-agent-proxy";
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 24 * 60 * 60 * 1000;
+const REAPER_INTERVAL_MS = Number(process.env.REAPER_INTERVAL_MS) || 60 * 60 * 1000;
 
 // ---------- bootstrap ----------
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -85,6 +87,25 @@ try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune err
 setInterval(() => {
   try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune error:", e); }
 }, 24 * 60 * 60 * 1000).unref();
+
+// session reaper: clean up idle sessions
+setInterval(() => {
+  try {
+    const expiryDate = new Date(Date.now() - SESSION_TTL_MS).toISOString();
+    const expiredIds = db.getExpiredSessions(expiryDate);
+    
+    if (expiredIds.length === 0) return;
+    
+    console.log(`[reaper] cleaning up ${expiredIds.length} expired sessions`);
+    for (const id of expiredIds) {
+      sandbox.destroy(id);
+      workspace.removeSessionWorktree(id);
+      db.deleteSession(id);
+    }
+  } catch (e) {
+    console.error("[reaper] error:", e);
+  }
+}, REAPER_INTERVAL_MS).unref();
 
 const github = GITHUB_TOKEN ? new GitHub(TARGET_REPO, GITHUB_TOKEN) : null;
 

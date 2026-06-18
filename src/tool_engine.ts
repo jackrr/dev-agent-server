@@ -28,6 +28,7 @@ export class ToolEngine {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<string> {
+    this.deps.db.touchSession(sessionId);
     const args = (input ?? {}) as Record<string, unknown>;
     switch (name) {
       case "bash":

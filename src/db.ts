@@ -110,6 +110,16 @@ export class DB {
       .run(new Date().toISOString(), id);
   }
 
+  getExpiredSessions(maxAgeIso: string): string[] {
+    return this.db
+      .prepare(
+        `SELECT id FROM sessions 
+         WHERE COALESCE(last_message_at, created_at) < ?`,
+      )
+      .all(maxAgeIso) as { id: string }[]
+      .map((row) => row.id);
+  }
+
   // ---- pr_links ----
   upsertPrLink(row: Partial<PrLinkRow> & { session_id: string }): void {
     const now = new Date().toISOString();
