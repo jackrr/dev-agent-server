@@ -152,6 +152,7 @@ api.get("/sessions", (c) => {
     title: s.title,
     status: s.status,
     created_at: s.created_at,
+    last_active: s.last_message_at,
   }));
   return c.json(rows);
 });

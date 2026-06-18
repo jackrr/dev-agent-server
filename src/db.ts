@@ -173,7 +173,7 @@ export class DB {
     return this.db
       .prepare(
         `SELECT id, title, description FROM sessions
-         ORDER BY created_at DESC LIMIT ?`,
+         ORDER BY COALESCE(last_message_at, created_at) DESC LIMIT ?`,
       )
       .all(limit) as { id: string; title: string; description: string | null }[];
   }
