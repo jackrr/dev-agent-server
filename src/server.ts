@@ -134,7 +134,7 @@ app.use("/api/*", apiKeyAuth());
 app.get("/mcp/sse", (c) => mcp.handleSSE(c));
 app.post("/mcp/messages", (c) => mcp.handleMessage(c));
 
-// Basic API for session management (optional, but useful for cleanup)
+// Basic API for system info
 const api = new Hono();
 
 api.get("/project", (c) =>
@@ -145,29 +145,6 @@ api.get("/project", (c) =>
     targetRepo: TARGET_REPO,
   }),
 );
-
-api.get("/sessions", (c) => {
-  const rows = db.listSessions().map((s) => ({
-    id: s.id,
-    title: s.title,
-    status: s.status,
-    created_at: s.created_at,
-    last_active: s.last_message_at,
-  }));
-  return c.json(rows);
-});
-
-api.delete("/sessions/:id", (c) => {
-  const id = c.req.param("id");
-  const session = db.getSession(id);
-  if (!session) return c.json({ error: "not found" }, 404);
-
-  sandbox.destroy(id);
-  workspace.removeSessionWorktree(id);
-  db.deleteSession(id);
-
-  return c.json({ deleted: true });
-});
 
 app.route("/api", api);
 
