@@ -3,7 +3,6 @@ import path from "node:path";
 import Database from "better-sqlite3";
 
 export type SessionStatus = "open" | "closed" | "error";
-export type MessageRole = "user" | "assistant" | "tool_result";
 
 export interface SessionRow {
   id: string;
@@ -12,7 +11,6 @@ export interface SessionRow {
   created_at: string;
   last_message_at: string | null;
   description: string | null;
-  device: string | null;
   worktree_path: string | null;
 }
 
@@ -21,7 +19,6 @@ export interface PrLinkRow {
   pr_number: number | null;
   pr_url: string | null;
   artifact_url: string | null;
-  qr_url: string | null;
   updated_at: string;
 }
 
@@ -33,7 +30,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at      TEXT NOT NULL,
   last_message_at TEXT,
   description     TEXT,
-  device          TEXT,
   worktree_path   TEXT
 );
 
@@ -42,7 +38,6 @@ CREATE TABLE IF NOT EXISTS pr_links (
   pr_number    INTEGER,
   pr_url       TEXT,
   artifact_url TEXT,
-  qr_url       TEXT,
   updated_at   TEXT NOT NULL
 );
 `;
@@ -63,21 +58,19 @@ export class DB {
     id: string;
     title: string;
     description?: string;
-    device?: string;
     worktreePath?: string;
   }): SessionRow {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, status, created_at, description, device, worktree_path)
-         VALUES (?, ?, 'open', ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, status, created_at, description, worktree_path)
+         VALUES (?, ?, 'open', ?, ?, ?)`,
       )
       .run(
         row.id,
         row.title,
         now,
         row.description ?? null,
-        row.device ?? null,
         row.worktreePath ?? null,
       );
     return this.getSession(row.id)!;
@@ -111,13 +104,11 @@ export class DB {
   }
 
   getExpiredSessions(maxAgeIso: string): string[] {
-    return this.db
-      .prepare(
-        `SELECT id FROM sessions 
-         WHERE COALESCE(last_message_at, created_at) < ?`,
-      )
-      .all(maxAgeIso) as { id: string }[]
-      .map((row) => row.id);
+    const rows = this.db.prepare(
+      `SELECT id FROM sessions
+       WHERE COALESCE(last_message_at, created_at) < ?`,
+    ).all(maxAgeIso) as { id: string }[];
+    return rows.map((row) => row.id);
   }
 
   // ---- pr_links ----
@@ -129,21 +120,19 @@ export class DB {
       pr_number: row.pr_number ?? existing?.pr_number ?? null,
       pr_url: row.pr_url ?? existing?.pr_url ?? null,
       artifact_url: row.artifact_url ?? existing?.artifact_url ?? null,
-      qr_url: row.qr_url ?? existing?.qr_url ?? null,
       updated_at: now,
     };
     this.db
       .prepare(
         `INSERT OR REPLACE INTO pr_links
-         (session_id, pr_number, pr_url, artifact_url, qr_url, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         (session_id, pr_number, pr_url, artifact_url, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         merged.session_id,
         merged.pr_number,
         merged.pr_url,
         merged.artifact_url,
-        merged.qr_url,
         merged.updated_at,
       );
   }
