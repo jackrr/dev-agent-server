@@ -52,3 +52,15 @@ Transition the server from a standalone agent host with its own UI to a professi
 | **Tooling** | Hardcoded in `Agent` class | Exposed via MCP Tool Discovery |
 | **Isolation** | Session-based worktrees | Session-based worktrees (mapped via `chat_id`) |
 | **Auth** | Cloudflare Access (Browser) | API Key (Server $\rightarrow$ Server) |
+
+## Implementation Status (2026-06-16)
+
+- [x] **Core Logic Decoupling**: `src/tool_engine.ts` created.
+- [x] **MCP Server Integration**: `src/mcp_server.ts` created (SSE transport & tools list).
+- [x] **Database Simplification**: `src/db.ts` refactored to remove message history.
+- [x] **App Integration**: `src/server.ts` updated to use MCP instead of the agent loop.
+- [x] **Redundant Component Removal**: Deletion of `src/agent.ts`, `src/llm_provider.ts`, and `public/`.
+- [x] **Auth Update**: Shift to API key / Bearer Token (`src/api_auth.ts`).
+- [x] **Infrastructure**: Dockerfile verified.
+
+

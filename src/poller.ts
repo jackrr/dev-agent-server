@@ -4,7 +4,7 @@ import type { ProjectConfig } from "./project_config.js";
 
 /**
  * Periodically polls GitHub for the release that the project's CI publishes
- * for each open PR, and updates `pr_links.artifact_url` / `qr_url` accordingly.
+ * for each open PR, and updates `pr_links.artifact_url` accordingly.
  */
 export class ArtifactPoller {
   private timer: NodeJS.Timeout | null = null;
@@ -58,7 +58,6 @@ export class ArtifactPoller {
         this.db.upsertPrLink({
           session_id: link.session_id,
           artifact_url: found.assetUrl,
-          qr_url: found.qrUrl ?? null,
         });
         console.log(
           `[poller] resolved artifact for session ${link.session_id} → ${found.assetUrl}`,

@@ -1,12 +1,8 @@
 # dev-agent-server
 
-Generic, project-agnostic web server that drives a Claude agent against any
-GitHub repository that ships a `.dev-agent/` directory. One server instance
-drives one target repo; the server itself contains zero project-specific logic.
+A stateful **MCP Tool Server** that provides dedicated sandboxed environments and git worktrees for engineering agents.
 
-See `AGENT_CONTRACTS.md` for the cross-repo contracts (shared specs between
-this server and target repos). The current target is
-[musicbox](https://github.com/jackrr/musicbox).
+This server integrates with any MCP-compatible client (e.g., Open WebUI) to provide a set of powerful tools for interacting with a target GitHub repository. Each chat session is mapped to a unique `sessionId`, which the server uses to provide an isolated worktree and a dedicated Podman/Docker sandbox container.
 
 ---
 
@@ -14,22 +10,22 @@ this server and target repos). The current target is
 
 ```
 src/
-  server.ts          # Hono app, routes, SSE streaming
-  agent.ts           # Claude agent loop + tool dispatch
-  db.ts              # SQLite schema + helpers (better-sqlite3)
+  server.ts          # Hono app and MCP SSE transport
+  mcp_server.ts     # MCP JSON-RPC handler and tool definitions
+  tool_engine.ts     # Core tool logic (bash, file I/O, PRs)
+  db.ts              # SQLite schema for session-to-worktree mappings
   workspace.ts       # git clone + per-session worktrees
   sandbox.ts         # per-session container manager (podman-remote or docker CLI)
-  github.ts          # gh CLI wrappers (PR creation, release polling)
-  poller.ts          # background poll loop for CI-published release artifacts
+  github.ts          # gh CLI wrappers (PR creation)
   project_config.ts  # reads + validates <target>/.dev-agent/config.yaml
-  report_parser.ts   # tolerant <bug-report> XML parser
-  auth.ts            # Cloudflare Access JWT middleware
-public/              # vanilla-JS chat UI
+  api_auth.ts        # API Key authentication middleware
+  proxy.ts           # tinyproxy-based egress allowlist management
+public/              # (Deleted)
 sandbox/             # base sandbox image + seccomp profile (fallback only)
 proxy/               # tinyproxy-based egress allowlist proxy
 systemd/             # Quadlet units for Fedora + rootless podman (primary deploy path)
 Makefile             # convenience targets for the Quadlet/systemd path
-test/                # parser + sandbox unit tests
+test/                # sandbox unit tests
 ```
 
 ---
@@ -37,34 +33,25 @@ test/                # parser + sandbox unit tests
 ## Deploy: Fedora + rootless podman + systemd (recommended)
 
 This path uses [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
-to express the services as native systemd units. No `docker compose` shim. The
-units live in `systemd/` and the `Makefile` automates installation.
+to express the services as native systemd units.
 
 The runbook below assumes:
 
 - A Fedora host (39+) with rootless podman already installed
-- A Cloudflare-managed domain
 - The target repo is `jackrr/musicbox` (substitute your own)
 
 ### 1. Host prerequisites
 
 ```bash
-# So your user systemd manager keeps running when you're not logged in
-# (otherwise the service stops the moment your last session ends):
+# Ensure user systemd manager survives logout
 sudo loginctl enable-linger $USER
 
-# Per-user podman API socket. The server container will talk to this to spawn
-# per-session sandbox containers.
+# Enable podman API socket
 systemctl --user enable --now podman.socket
-ls -l /run/user/$(id -u)/podman/podman.sock     # verify it exists
 
-# Sanity-check the Docker-compatible API:
-curl -s --unix-socket /run/user/$(id -u)/podman/podman.sock \
-     http://d/v1.41/version | head
-
-# Tooling. podman-docker provides /usr/bin/docker as a thin shim so the
-# `docker` CLI inside our container image works against podman's socket.
+# Install required tooling
 sudo dnf install -y podman-docker cloudflared make jq
+```
 
 ### 2. Clone + configure
 
@@ -77,255 +64,118 @@ chmod 600 .env
 $EDITOR .env
 ```
 
-Fill in `.env` (defaults are already set for rootless podman):
+Key `.env` settings:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
 TARGET_REPO=jackrr/musicbox
-GITHUB_TOKEN=github_pat_...                          # contents:rw + PRs:rw on the target repo
-WORKSPACE_DIR=/data/workspaces                       # (path inside container; leave as-is)
-DATA_DIR=/data/db                                    # (path inside container; leave as-is)
-CF_ACCESS_TEAM_DOMAIN=                               # filled in step 5
-CF_ACCESS_AUD=                                       # filled in step 5
-DEV_AGENT_TRUST_LOCAL=1                              # flip to 0 after step 5
-CONTAINER_SOCKET=/run/user/1000/podman/podman.sock   # adjust if your UID isn't 1000
-SANDBOX_USERNS=keep-id:uid=1000,gid=1000             # rootless: maps host user to container uid 1000
+GITHUB_TOKEN=github_pat_...                          # required for PRs and worktrees
+API_KEY=your-secure-api-key                          # Used for server-to-server auth
+WORKSPACE_DIR=/data/workspaces
+DATA_DIR=/data/db
+CONTAINER_SOCKET=/run/user/1000/podman/podman.sock
+SANDBOX_USERNS=keep-id:uid=1000,gid=1000
 SANDBOX_USER=1000:1000
-ENGINE_CLI=podman                                    # use podman-remote for --userns support
-SANDBOX_NETWORK=agent-egress                         # matches NetworkName in agent-egress.network
+ENGINE_CLI=podman
+SANDBOX_NETWORK=agent-egress
 PROXY_URL=http://dev-agent-proxy:8888
 ```
-
-`DEV_AGENT_TRUST_LOCAL=1` lets you smoke-test before Cloudflare Access is
-wired up. We turn it off in step 6.
 
 ### 3. Build images
 
 ```bash
 make build
 # Builds:
-#   localhost/dev-agent-server:latest  (the server itself)
-#   localhost/dev-agent-proxy:latest   (the egress allowlist proxy)
+#   localhost/dev-agent-server:latest
+#   localhost/dev-agent-proxy:latest
 ```
 
-The base sandbox image (`sandbox/Dockerfile.base`) is a *fallback* used only
-when the target repo has no `.dev-agent/Dockerfile.sandbox`. Build it once if
-you want a reasonable default:
-
+Build the fallback sandbox image:
 ```bash
 podman build -t dev-agent/sandbox-base:latest -f sandbox/Dockerfile.base sandbox/
 ```
 
-For musicbox, the project ships its own `.dev-agent/Dockerfile.sandbox` and
-the server builds it on demand the first time a session needs it.
-
-### 4. Install Quadlet units and start the service
+### 4. Install and start
 
 ```bash
-make install              # symlinks systemd/*.{network,volume,container} into
-                          #   ~/.config/containers/systemd/ and runs daemon-reload
-make up                   # systemctl --user start dev-agent-server.service
-make status               # show service status
-make logs                 # follow server journal (Ctrl-C to stop)
-make verify               # check boot-durability prereqs
+make install              # symlinks units into ~/.config/containers/systemd/
+make up                  # systemctl --user start dev-agent-server.service
+make logs                # follow server journal
 ```
 
-`dev-agent-server.service` pulls in the proxy, the `agent-egress` network,
-and the two volumes via systemd dependencies — there's no need to start them
-individually.
+### 5. Connectivity & Auth
 
-**Auto-start on host reboot is already handled** by the `[Install]
-WantedBy=default.target` sections in each `.container` file: Quadlet's
-generator wires up the necessary symlinks every time `daemon-reload` runs.
-You do **not** need `systemctl --user enable` (and in fact it errors on
-Quadlet-generated units — they live in a generator path that `enable`
-doesn't understand). Just keep lingering on (step 1) and `make verify`
-should show `is-enabled=generated` for both services.
+By default, the server is bound to `:3000`. If you use a Cloudflare Tunnel, map the public hostname to `http://localhost:3000`.
+
+**Auth**: All `/mcp/*` and `/api/*` endpoints require the `x-api-key` header to match the `API_KEY` in `.env`.
 
 Smoke test:
 
 ```bash
-curl -s http://127.0.0.1:3737/healthz                # → ok
-curl -s http://127.0.0.1:3737/api/project | jq .     # → { name, description, ... }
+# Liveness check
+curl -s http://127.0.0.1:3000/healthz                # → ok
 
-# Confirm the server can reach podman via the bind-mounted socket:
-podman exec dev-agent-server docker ps               # lists proxy + server containers
-
-# Confirm the proxy is enforcing the allowlist:
-podman exec dev-agent-server \
-  curl -x http://dev-agent-proxy:8888 -sS https://example.com \
-       -o /dev/null -w '%{http_code}\n'
-# → 403 (Forbidden by tinyproxy filter)
-podman exec dev-agent-server \
-  curl -x http://dev-agent-proxy:8888 -sS https://api.anthropic.com \
-       -o /dev/null -w '%{http_code}\n'
-# → 200 or auth-related 4xx, but NOT 403
-```
-
-If anything's wrong: `make logs`, then `make down`, fix, `make up`.
-
-### 5. Cloudflare Tunnel + Access
-
-In the Cloudflare dashboard → **Zero Trust** → **Networks → Tunnels**:
-
-1. **Create a tunnel** named `dev-agent`. Copy the install command it gives
-   you (`cloudflared service install <token>`) and run it on the host. This
-   installs cloudflared as a *system* (root) service that connects out from
-   the host. It does not need access to the rootless podman socket — it just
-   reaches `127.0.0.1:3737`, which the Quadlet unit publishes.
-2. Add a **public hostname** to the tunnel:
-   - Subdomain: `dev-agent`
-   - Domain: `jackratner.com`
-   - Service: `HTTP` → `localhost:3737`
-
-Then **Zero Trust → Access → Applications → Add application** (Self-hosted):
-
-3. Name: `dev-agent`. Application domain: `dev-agent.jackratner.com`.
-4. Identity provider: GitHub or one-time PIN.
-5. Policy: `Include → Emails → your@email`.
-6. Once created, click into the application → **Overview** → copy the
-   **Application Audience (AUD) Tag** into `.env` as `CF_ACCESS_AUD`.
-7. Find your team domain at **Zero Trust → Settings → Custom Pages**
-   (`https://<team>.cloudflareaccess.com`). Put `<team>` in `.env` as
-   `CF_ACCESS_TEAM_DOMAIN`.
-
-### 6. Lock it down
-
-```bash
-sed -i 's/^DEV_AGENT_TRUST_LOCAL=1/DEV_AGENT_TRUST_LOCAL=0/' .env
-systemctl --user restart dev-agent-server.service
-make verify                                          # confirm boot durability
-```
-
-Visit `https://dev-agent.jackratner.com` from your phone or laptop.
-Cloudflare Access prompts for email; on success you land on the chat UI and
-the server has verified the JWT in `auth.ts`.
-
-### Day-to-day operations
-
-```bash
-systemctl --user restart dev-agent-server     # after pulling new code (rebuild first)
-make build && systemctl --user restart dev-agent-server
-
-journalctl --user -u dev-agent-server -f       # live logs
-journalctl --user -u dev-agent-server -n 200   # recent
-
-podman ps                                      # see proxy + server + active sandboxes
-podman volume ls                               # workspaces, db
-```
-
-To wipe everything (nuclear):
-
-```bash
-make down
-podman volume rm systemd-dev-agent-workspaces systemd-dev-agent-db
+# Project info (needs API key)
+curl -H "x-api-key: your-secure-api-key" \
+     -s http://127.0.0.1:3000/api/project | jq .
 ```
 
 ---
 
-## Troubleshooting
+## MCP Interface
 
-**"connection refused" when the server tries to spawn a sandbox.**
-The user podman socket isn't running. Check `systemctl --user status
-podman.socket`. If lingering wasn't enabled, this happens after every logout.
+The server implements the **Model Context Protocol (MCP)** using SSE transport.
 
-**Sandbox container can read /workspace but can't write to it.**
-`SANDBOX_USERNS` isn't set to `keep-id`, so sandbox UID 1000 is mapped to a
-subuid your account can't touch. Verify with `podman exec dev-agent-<id> id`
-— the user's UID inside should equal yours on the host.
+### Endpoints
+- `GET /mcp/sse`: Establishes the SSE connection.
+- `POST /mcp/messages`: Receives JSON-RPC requests.
 
-**`make build` succeeds but `make up` says image not found.**
-Quadlet only resolves images from the local podman storage of the user
-running the unit. If you built as root (e.g. with `sudo podman build`), the
-rootless user can't see them. Build as your user.
+### Available Tools
+The server exposes the following tools to the MCP Client:
 
-**SELinux denials (`avc: denied` in `journalctl`).**
-The Quadlet units use `:Z` / `:z` mount labels, which usually suffices. If
-you're still seeing denials on the bind-mounted podman socket, add
-`SecurityLabelDisable=true` under `[Container]` in
-`systemd/dev-agent-server.container`. Acceptable in single-tenant rootless
-mode.
-
-**Memory / CPU limits silently ignored.**
-cgroups v2 controller delegation isn't enabled for your user slice. Verify:
-
-```bash
-cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/cgroup.controllers
-# should include "cpu memory pids"
-```
-
-If not, `sudo systemctl edit user@.service` and add a delegation drop-in.
-
-**The first sandbox spawn hangs for a minute.**
-First-time image pull into your user's container storage. Subsequent runs
-are instant.
-
----
-
-## Target repo contract
-
-The server reads `<target-repo>/.dev-agent/config.yaml` at boot. If it's
-missing, the server runs in **generic mode**: bash tool only, no `open_pr`,
-no artifact polling. See `AGENT_CONTRACTS.md` for the full schema.
-
-`<target-repo>/.dev-agent/allowlist.txt` (optional) is automatically synced
-into the proxy filter at boot and whenever the main clone advances. The
-server writes it to `./proxy/project.txt`, which is bind-mounted into the
-proxy container.
+| Tool | Description | Required Params |
+|------|-------------|------------------|
+| `bash` | Run bash command in session sandbox | `sessionId`, `cmd` |
+| `read_file` | Read file from session worktree | `sessionId`, `path` |
+| `write_file` | Write file to session worktree | `sessionId`, `path`, `content` |
+| `apply_patch` | Apply unified diff to worktree | `sessionId`, `patch` |
+| `open_pr` | Commit changes and open GitHub PR | `sessionId`, `title`, `body` |
+| `list_recent_sessions` | List existing session IDs | `sessionId`, `limit` |
 
 ---
 
 ## REST API
 
-All `/api/*` routes gated by `auth.ts`. `/healthz` is unauthenticated.
+Used for monitoring and system identity. Requires `x-api-key` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/healthz` | unauthenticated liveness probe |
-| GET    | `/api/project` | `{ name, description, shipEnabled, targetRepo }` |
-| POST   | `/api/sessions` | `{ initial_report?, title? }` → new session |
-| GET    | `/api/sessions` | list sessions |
-| GET    | `/api/sessions/:id` | full session (messages + app_contexts) |
-| POST   | `/api/sessions/:id/messages` | SSE stream of agent output |
-| GET    | `/api/sessions/:id/pr` | PR + artifact + QR URLs |
-| GET    | `/` | static chat UI |
-
-SSE event names: `token`, `tool_call`, `tool_result`, `done`, `error`.
+| GET    | `/api/project` | Get target project configuration |
 
 ---
 
 ## Local development
 
-For poking at the parser, schema, and HTTP surface without the full deploy:
-
 ```bash
 npm install
-DEV_AGENT_TRUST_LOCAL=1 \
 TARGET_REPO=owner/repo \
-ANTHROPIC_API_KEY=sk-ant-... \
 GITHUB_TOKEN=ghp_... \
+API_KEY=dev-key \
 npm run dev
 ```
 
-This still requires `git`, `gh`, and a podman/docker socket on the path; the
-server clones the target repo on boot and spawns sandbox containers on first
-agent tool call.
-
-Run the parser tests on their own (no env required):
-
+Run tests:
 ```bash
 npm test
 ```
 
 ---
 
-## Bug-report `<bug-report>` format
+## Target repo contract
 
-Owned by this component, consumed verbatim. See `AGENT_CONTRACTS.md`. The
-parser is intentionally lenient — unknown top-level tags land in `unknown`;
-unknown attributes on `<app-context>` (e.g. `truncated="true" size="48213"`)
-are preserved as JSON. Multiple `<app-context>` blocks with different `name`
-attributes are all stored.
+The server reads `<target-repo>/.dev-agent/config.yaml` at boot. If missing, it runs in **generic mode** (bash tool only). See `AGENT_CONTRACTS.md` for details.
+
+`<target-repo>/.dev-agent/allowlist.txt` (optional) is synced into the proxy filter.
 
 ---
 

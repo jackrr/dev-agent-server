@@ -58,7 +58,7 @@ export class GitHub {
     headSha: string;
     releaseTagPattern: string;
     assetPattern: string;
-  }): { tag: string; assetUrl?: string; qrUrl?: string } {
+  }): { tag: string; assetUrl?: string } {
     const shortSha = args.headSha.slice(0, 7);
     const tag = args.releaseTagPattern
       .replace("{pr_number}", String(args.prNumber))
@@ -84,8 +84,7 @@ export class GitHub {
     }
     const re = globToRegex(args.assetPattern);
     const main = assets.find((a) => re.test(a.name));
-    const qr = assets.find((a) => /\.png$/i.test(a.name) && /qr/i.test(a.name));
-    return { tag, assetUrl: main?.url, qrUrl: qr?.url };
+    return { tag, assetUrl: main?.url };
   }
 
   /** Fetches the head SHA of a PR. */

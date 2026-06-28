@@ -1,21 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
-import { streamSSE } from "hono/streaming";
 import { DB } from "./db.js";
 import { Workspace } from "./workspace.js";
 import { SandboxManager } from "./sandbox.js";
 import { GitHub } from "./github.js";
-import { Agent, type AgentEvent } from "./agent.js";
+import { ToolEngine } from "./tool_engine.js";
+import { MCPServer } from "./mcp_server.js";
 import { loadProjectConfig, type ProjectConfig } from "./project_config.js";
-import { parseReport } from "./report_parser.js";
-import { cfAccessAuth } from "./auth.js";
-import { ArtifactPoller } from "./poller.js";
-import { buildProvider } from "./llm_provider.js";
+import { syncProxyAllowlist } from "./proxy.js";
+import { apiKeyAuth } from "./api_auth.js";
 
 // ---------- env ----------
 function envRequired(name: string): string {
@@ -28,25 +23,18 @@ const PORT = Number(process.env.PORT || 3000);
 const TARGET_REPO = envRequired("TARGET_REPO");
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || path.resolve("./workspaces");
-// Host path corresponding to WORKSPACE_DIR. Only differs when the server runs
-// in a container and the workspace is a named volume (or differently-mounted
-// bind). Used to rewrite paths before passing them to the engine daemon.
 const WORKSPACE_DIR_HOST = process.env.WORKSPACE_DIR_HOST || undefined;
 const DATA_DIR = process.env.DATA_DIR || path.resolve("./data");
-const TRUST_LOCAL = process.env.DEV_AGENT_TRUST_LOCAL === "1";
-const CF_TEAM = process.env.CF_ACCESS_TEAM_DOMAIN || "";
-const CF_AUD = process.env.CF_ACCESS_AUD || "";
 const SANDBOX_NETWORK = process.env.SANDBOX_NETWORK || "agent_egress";
 const PROXY_URL = process.env.PROXY_URL || "http://proxy:8888";
-// Path (on the server's filesystem) to the project.txt that is bind-mounted
-// read-only into the proxy container. The server rewrites this file at boot
-// so the proxy's filter always reflects the project's allowlist.
 const PROXY_PROJECT_FILE = process.env.PROXY_PROJECT_FILE || path.resolve("./proxy/project.txt");
 const FALLBACK_IMAGE = process.env.FALLBACK_SANDBOX_IMAGE || "dev-agent/sandbox-base:latest";
 const SECCOMP_PROFILE = process.env.SECCOMP_PROFILE || path.resolve("./sandbox/seccomp.json");
-// Path as the engine (docker/podman daemon on the host) sees it. Only differs
-// from SECCOMP_PROFILE when the server itself runs in a container.
 const SECCOMP_PROFILE_HOST = process.env.SECCOMP_PROFILE_HOST || undefined;
+const ENGINE_CLI = process.env.ENGINE_CLI || "docker";
+const PROXY_CONTAINER = process.env.PROXY_CONTAINER || "dev-agent-proxy";
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 24 * 60 * 60 * 1000;
+const REAPER_INTERVAL_MS = Number(process.env.REAPER_INTERVAL_MS) || 60 * 60 * 1000;
 
 // ---------- bootstrap ----------
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -60,68 +48,23 @@ const workspace = new Workspace({
 });
 
 console.log(`[boot] cloning/fetching target repo: ${TARGET_REPO}`);
-workspace.ensureMainClone(); // return value ignored at boot — always sync below
+workspace.ensureMainClone();
 
 const projectConfig: ProjectConfig | null = loadProjectConfig(workspace.mainDir);
 if (projectConfig) {
-  console.log(`[boot] project: ${projectConfig.name}${projectConfig.ship ? " (ship enabled)" : " (chat-only)"}`);
+  console.log(`[boot] project: ${projectConfig.name}${projectConfig.ship ? " (ship enabled)" : " (tool-only)"}`);
 } else {
   console.log("[boot] no .dev-agent/config.yaml — running in generic mode");
 }
 
-// Propagate the project’s egress allowlist into the proxy filter file.
-// Called at boot (unconditionally) and whenever ensureMainClone() reports
-// that HEAD advanced, so the proxy always reflects whatever is on origin/main.
-//
-// If the file content actually changed, we signal tinyproxy to exit and let
-// systemd Restart=on-failure bring the container back with the new filter.
-// We do NOT use `podman restart` because that conflicts with systemd’s
-// Quadlet management and leaves the container with broken networking.
-const ENGINE_CLI = process.env.ENGINE_CLI || "docker";
-const PROXY_CONTAINER = process.env.PROXY_CONTAINER || "dev-agent-proxy";
+const proxySyncConfig = {
+  proxyProjectFile: PROXY_PROJECT_FILE,
+  proxyContainer: PROXY_CONTAINER,
+  engineCli: ENGINE_CLI,
+};
 
-function syncProxyAllowlist(): void {
-  const projectAllowlist = path.join(workspace.mainDir, ".dev-agent", "allowlist.txt");
-  let extra = "";
-  if (fs.existsSync(projectAllowlist)) {
-    extra = fs.readFileSync(projectAllowlist, "utf8");
-    console.log(`[proxy] loaded project allowlist from ${projectAllowlist}`);
-  } else {
-    console.log("[proxy] no .dev-agent/allowlist.txt — using server defaults only");
-  }
-
-  // Check if the file actually changed; skip the disruptive proxy reload if not.
-  let current = "";
-  try { current = fs.readFileSync(PROXY_PROJECT_FILE, "utf8"); } catch {}
-  if (current === extra) {
-    console.log("[proxy] allowlist unchanged — skipping proxy reload");
-    return;
-  }
-
-  try {
-    fs.mkdirSync(path.dirname(PROXY_PROJECT_FILE), { recursive: true });
-    fs.writeFileSync(PROXY_PROJECT_FILE, extra);
-    console.log(`[proxy] wrote updated allowlist to ${PROXY_PROJECT_FILE}`);
-  } catch (e) {
-    console.error(`[proxy] failed to write ${PROXY_PROJECT_FILE}:`, e);
-    return;
-  }
-  // Signal tinyproxy (PID 1) to exit. systemd Restart=on-failure will bring
-  // the container back, re-running the entrypoint with the new filter.
-  // Do NOT use `podman restart` — it conflicts with systemd’s Quadlet
-  // management and leaves the container with broken networking.
-  const kill = spawnSync(ENGINE_CLI, ["kill", "--signal", "TERM", PROXY_CONTAINER], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  if (kill.status === 0) {
-    console.log(`[proxy] sent SIGTERM to ${PROXY_CONTAINER}; systemd will restart it`);
-  } else {
-    console.error(`[proxy] failed to signal ${PROXY_CONTAINER}: ${kill.stderr}`);
-  }
-}
-
-syncProxyAllowlist(); // always sync on boot regardless of whether HEAD moved
+const syncProxy = () => syncProxyAllowlist(proxySyncConfig, workspace.mainDir);
+syncProxy();
 
 const sandbox = new SandboxManager({
   network: SANDBOX_NETWORK,
@@ -140,48 +83,59 @@ const sandbox = new SandboxManager({
     : undefined,
 });
 
-// Prune stale sandbox images on boot and then daily. Best-effort; failures
-// are swallowed inside pruneOldImages so they can't crash the server.
 try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune error:", e); }
 setInterval(() => {
   try { sandbox.pruneOldImages(); } catch (e) { console.error("[sandbox] prune error:", e); }
 }, 24 * 60 * 60 * 1000).unref();
 
+// session reaper: clean up idle sessions
+setInterval(() => {
+  try {
+    const expiryDate = new Date(Date.now() - SESSION_TTL_MS).toISOString();
+    const expiredIds = db.getExpiredSessions(expiryDate);
+    
+    if (expiredIds.length === 0) return;
+    
+    console.log(`[reaper] cleaning up ${expiredIds.length} expired sessions`);
+    for (const id of expiredIds) {
+      sandbox.destroy(id);
+      workspace.removeSessionWorktree(id);
+      db.deleteSession(id);
+    }
+  } catch (e) {
+    console.error("[reaper] error:", e);
+  }
+}, REAPER_INTERVAL_MS).unref();
+
 const github = GITHUB_TOKEN ? new GitHub(TARGET_REPO, GITHUB_TOKEN) : null;
 
-const provider = buildProvider();
-
-const agent = new Agent({
+const toolEngine = new ToolEngine({
   db,
   workspace,
   sandbox,
   github,
   projectConfig,
   mainWorktree: workspace.mainDir,
-  provider,
+  syncProxy,
 });
 
-// Track active agent turns so they can be cancelled from the UI.
-const activeAborts = new Map<string, AbortController>();
-
-if (projectConfig?.ship && github) {
-  const poller = new ArtifactPoller(db, github, projectConfig);
-  poller.start();
-}
+const mcp = new MCPServer(toolEngine);
 
 // ---------- app ----------
 const app = new Hono();
 
 app.get("/healthz", (c) => c.text("ok"));
 
-const auth = cfAccessAuth({
-  teamDomain: CF_TEAM,
-  audience: CF_AUD,
-  trustLocal: TRUST_LOCAL,
-});
+// Use API Key auth for all MCP and API endpoints.
+app.use("/mcp/*", apiKeyAuth());
+app.use("/api/*", apiKeyAuth());
 
+// MCP SSE transport
+app.get("/mcp/sse", (c) => mcp.handleSSE(c));
+app.post("/mcp/messages", (c) => mcp.handleMessage(c));
+
+// Basic API for system info
 const api = new Hono();
-api.use("*", auth);
 
 api.get("/project", (c) =>
   c.json({
@@ -192,237 +146,11 @@ api.get("/project", (c) =>
   }),
 );
 
-api.post("/sessions", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as {
-    initial_report?: string;
-    title?: string;
-  };
-  const sessionId = newSessionId();
-  const parsed = body.initial_report ? parseReport(body.initial_report) : null;
-  const title =
-    (body.title && body.title.trim()) ||
-    deriveTitle(parsed?.description) ||
-    `Session ${sessionId.slice(0, 8)}`;
-
-  // Ensure the main clone is up to date before creating the worktree.
-  // If HEAD moved, re-sync the proxy allowlist so new sessions benefit from
-  // any updates to .dev-agent/allowlist.txt that landed since server boot.
-  const advanced = workspace.ensureMainClone();
-  if (advanced) syncProxyAllowlist();
-
-  // Create the worktree.
-  let worktreePath: string;
-  if (projectConfig?.ship) {
-    worktreePath = workspace.createSessionWorktree({
-      sessionId,
-      baseBranch: projectConfig.ship.baseBranch,
-      branchPrefix: projectConfig.ship.branchPrefix,
-    });
-  } else {
-    worktreePath = workspace.createGenericWorktree(sessionId);
-  }
-
-  const session = db.createSession({
-    id: sessionId,
-    title,
-    description: parsed?.description,
-    device: parsed?.device,
-    worktreePath,
-  });
-
-  // Persist app contexts verbatim.
-  if (parsed) {
-    for (const ac of parsed.appContexts) {
-      db.putAppContext(sessionId, ac.name, ac.content, ac.attrs);
-    }
-  }
-
-  // Seed the conversation with the raw report wrapped in <report>...</report>.
-  if (body.initial_report) {
-    db.appendMessage({
-      id: crypto.randomUUID(),
-      sessionId,
-      role: "user",
-      content: `<report>\n${body.initial_report}\n</report>`,
-    });
-  }
-
-  return c.json({
-    id: session.id,
-    title: session.title,
-    created_at: session.created_at,
-  });
-});
-
-api.get("/sessions", (c) => {
-  const rows = db.listSessions().map((s) => ({
-    id: s.id,
-    title: s.title,
-    status: s.status,
-    created_at: s.created_at,
-    last_message_at: s.last_message_at,
-  }));
-  return c.json(rows);
-});
-
-api.get("/sessions/:id", (c) => {
-  const id = c.req.param("id");
-  const session = db.getSession(id);
-  if (!session) return c.json({ error: "not found" }, 404);
-  const messages = db.listMessages(id).map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    created_at: m.created_at,
-  }));
-  const app_contexts = db.listAppContexts(id);
-  return c.json({ session, messages, app_contexts });
-});
-
-api.delete("/sessions/:id", (c) => {
-  const id = c.req.param("id");
-  const session = db.getSession(id);
-  if (!session) return c.json({ error: "not found" }, 404);
-
-  // Cancel any in-flight agent turn.
-  const ac = activeAborts.get(id);
-  if (ac) {
-    ac.abort();
-    activeAborts.delete(id);
-  }
-
-  // Tear down the sandbox container (idempotent).
-  sandbox.destroy(id);
-
-  // Remove the git worktree (idempotent).
-  workspace.removeSessionWorktree(id);
-
-  // Remove from the database.
-  db.deleteSession(id);
-
-  return c.json({ deleted: true });
-});
-
-api.get("/sessions/:id/pr", (c) => {
-  const id = c.req.param("id");
-  const link = db.getPrLink(id);
-  if (!link) return c.json({});
-  return c.json({
-    pr_number: link.pr_number,
-    pr_url: link.pr_url,
-    artifact_url: link.artifact_url,
-    qr_url: link.qr_url,
-  });
-});
-
-api.post("/sessions/:id/cancel", (c) => {
-  const id = c.req.param("id");
-  const ac = activeAborts.get(id);
-  if (ac) {
-    ac.abort();
-    activeAborts.delete(id);
-    return c.json({ cancelled: true });
-  }
-  return c.json({ cancelled: false, reason: "no active turn" });
-});
-
-api.post("/sessions/:id/messages", (c) => {
-  const id = c.req.param("id");
-  const session = db.getSession(id);
-  if (!session) return c.json({ error: "not found" }, 404);
-
-  return streamSSE(c, async (stream) => {
-    const send = async (event: string, data: unknown) => {
-      await stream.writeSSE({ event, data: JSON.stringify(data) });
-    };
-
-    const existingAbort = activeAborts.get(id);
-    if (existingAbort) {
-      existingAbort.abort();
-      activeAborts.delete(id);
-    }
-
-    const ac = new AbortController();
-    activeAborts.set(id, ac);
-
-    try {
-      const body = (await c.req.json()) as { content: string };
-      if (!body.content || typeof body.content !== "string") {
-        await send("error", { message: "content is required" });
-        return;
-      }
-      db.appendMessage({
-        id: crypto.randomUUID(),
-        sessionId: id,
-        role: "user",
-        content: body.content,
-      });
-      const history = db.listMessages(id);
-      await agent.runTurn({
-        sessionId: id,
-        history,
-        emit: (e: AgentEvent) => {
-          // Fire-and-forget; SSE writes are async but ordering is preserved within the queue.
-          void send(e.type, e);
-        },
-        signal: ac.signal,
-      });
-    } catch (e) {
-      await send("error", { message: (e as Error).message });
-    } finally {
-      activeAborts.delete(id);
-    }
-  });
-});
-
 app.route("/api", api);
-
-// Static UI.
-const publicDir = path.resolve("./public");
-if (fs.existsSync(publicDir)) {
-  const appJsPath = path.join(publicDir, "app.js");
-  const indexHtmlPath = path.join(publicDir, "index.html");
-
-  /**
-   * Content-hash of app.js. Rewriting the <script src="/app.js?v=HASH"> in
-   * index.html guarantees browsers fetch the new JS whenever its content
-   * changes — even past aggressive mobile caches — and never re-fetch when
-   * nothing changed. Re-read per-request so `npm run dev` (no server restart)
-   * still picks up edits to public/. Cost: one sha256 over a small file.
-   */
-  function readAppJs(): { body: string; version: string } {
-    const body = fs.readFileSync(appJsPath, "utf8");
-    const version = crypto.createHash("sha256").update(body).digest("hex").slice(0, 12);
-    return { body, version };
-  }
-
-  app.get("/", (c) => {
-    const { version } = readAppJs();
-    const html = fs.readFileSync(indexHtmlPath, "utf8").replace(
-      /(<script[^>]*\bsrc=["']\/app\.js)(\?[^"']*)?(["'])/,
-      `$1?v=${version}$3`,
-    );
-    // no-cache on HTML so the latest ?v= hash always reaches the client.
-    return c.html(html, 200, { "cache-control": "no-cache, must-revalidate" });
-  });
-  app.use(
-    "/static/*",
-    serveStatic({ root: "./public", rewriteRequestPath: (p) => p.replace(/^\/static/, "") }),
-  );
-  app.get("/app.js", (c) => {
-    const { body, version } = readAppJs();
-    return c.body(body, 200, {
-      "content-type": "application/javascript",
-      // Long-lived cache is safe because the URL changes when content changes.
-      "cache-control": "public, max-age=31536000, immutable",
-      etag: `"${version}"`,
-    });
-  });
-}
 
 // ---------- listen ----------
 serve({ fetch: app.fetch, port: PORT }, (info) => {
-  console.log(`[ready] dev-agent-server listening on :${info.port}`);
+  console.log(`[ready] dev-agent-server (MCP) listening on :${info.port}`);
 });
 
 process.on("SIGTERM", () => {
@@ -435,16 +163,3 @@ process.on("SIGINT", () => {
   sandbox.destroyAll();
   process.exit(0);
 });
-
-// ---------- helpers ----------
-function newSessionId(): string {
-  // 8-byte hex, prefixed for readability in branch names.
-  return crypto.randomBytes(6).toString("hex");
-}
-
-function deriveTitle(description: string | undefined): string | null {
-  if (!description) return null;
-  const firstLine = description.trim().split(/\r?\n/)[0]?.trim();
-  if (!firstLine) return null;
-  return firstLine.slice(0, 80);
-}

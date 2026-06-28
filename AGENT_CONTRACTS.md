@@ -15,7 +15,6 @@ the files alongside it.
 ```
 .dev-agent/
 ├── config.yaml          # required — identity, sandbox, PR/artifact config
-├── prompt.md            # optional — appended verbatim to the agent's system prompt
 ├── allowlist.txt        # optional — egress hostnames appended to the proxy filter
 ├── Dockerfile.sandbox   # optional — custom sandbox image for this project's toolchain
 └── runner/              # self-hosted GitHub Actions runner image (project-owned)
@@ -24,21 +23,20 @@ the files alongside it.
 ### `config.yaml` schema
 
 ```yaml
-name: "Musicbox"                              # shown in the web UI
+name: "Musicbox"                              # identifying name
 description: "Offline-first mobile DAW (Flutter + Rust)"
 
 agent:
-  prompt_file: .dev-agent/prompt.md           # optional; appended to base system prompt
   preflight: |                                # optional; bash run once on worktree creation
-    cd app && flutter pub get
+    cd app && flutter pubget
     cd ../engine && cargo fetch
-  context_files:                              # optional; concatenated into system prompt
+  context_files:                              # optional; listed for client awareness
     - CLAUDE.md
 
 sandbox:
   build: .dev-agent/Dockerfile.sandbox        # OR image: <pre-built-image>
 
-ship:                                         # optional; omit for chat-only mode
+ship:                                         # optional; enables 'open_pr' tool
   branch_prefix: agent/
   base_branch: main
   artifact_workflow: build-apk.yml
@@ -47,87 +45,35 @@ ship:                                         # optional; omit for chat-only mod
 ```
 
 If `config.yaml` is missing, the server runs in **generic mode** (bash tool
-only, no `open_pr`, no artifact polling).
+only, no `open_pr`).
 
-If `ship:` is present, the server creates PR branches as
-`<branch_prefix><session-id>`, polls GitHub releases matching
-`release_tag_pattern` for asset files matching `artifact_asset_pattern`, and
-surfaces download URLs in the chat UI.
+If `ship:` is present, the server allows the agent to create PR branches as
+`<branch_prefix><session-id>` and open Pull Requests via the `open_pr` tool.
 
 ---
 
-## 2. `<bug-report>` format (target app → server)
+## 2. MCP Tool Interface
 
-The target app captures a bug report and copies it to the clipboard. The user
-pastes it into the server's web UI. The server parses it via
-`report_parser.ts`.
+The server provides a set of tools to an MCP client. The client is responsible for 
+providing the system prompt and orchestration.
 
-```xml
-<bug-report version="1">
-<description>
-Free-form user-typed description.
-</description>
-<device>
-android 14 · pixel 7 · app 0.4.2+17
-</device>
-<recent-logs lines="120">
-[timestamp] log line
-...
-</recent-logs>
-<app-context name="project-digest">
-tracks: 6  bpm: 120  steps: 16  ...
-</app-context>
-<app-context name="project-snapshot" truncated="true" size="48213">
-elided
-</app-context>
-</bug-report>
-```
+### Core Tools
 
-**Required:** `<description>`, `<device>`. Everything else optional.
-
-**Extension point:** `<app-context name="...">` — multiple blocks allowed,
-distinguished by `name`. Extra attributes (e.g. `truncated`, `size`) are
-preserved as JSON. The server stores each block verbatim and passes them to
-the agent; it has no knowledge of what the context names mean.
-
-Unknown top-level tags are stored verbatim. Adding new section types does
-not require server changes.
+| Tool | Purpose |
+|------|---------|
+| `bash` | Executes an arbitrary command in the isolated session container. |
+| `read_file` | Reads a file from the session's git worktree. |
+| `write_file` | Writes content to a file in the session's git worktree. |
+| `apply_patch` | Applies a unified diff to the session's worktree. |
+| `open_pr` | Commits pending changes and opens a GitHub PR (if `ship` is configured). |
 
 ---
 
-## 3. CI artifact flow (target CI → server)
+## 3. Server REST API
 
-The target repo's CI workflow runs on PRs. For `agent/*` branches it
-creates a GitHub pre-release tagged per `ship.release_tag_pattern` with
-build artifacts attached.
-
-The server's `ArtifactPoller` finds the release by matching the tag pattern
-against the PR number + head SHA, and the artifact by globbing
-`ship.artifact_asset_pattern` against release assets.
-
----
-
-## 4. Server REST API (server → web UI / consumers)
-
-All `/api/*` routes require Cloudflare Access auth. `/healthz` is open.
+Used for system identity. Requires `x-api-key` header.
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET    | `/healthz` | liveness probe |
 | GET    | `/api/project` | `{ name, description, shipEnabled, targetRepo }` |
-| POST   | `/api/sessions` | `{ initial_report?, title? }` → create session |
-| GET    | `/api/sessions` | list sessions |
-| GET    | `/api/sessions/:id` | session + messages + app_contexts |
-| POST   | `/api/sessions/:id/messages` | `{ content }` → SSE stream |
-| GET    | `/api/sessions/:id/pr` | PR + artifact + QR URLs |
-| GET    | `/` | static chat UI |
-
-**SSE events** on `POST /api/sessions/:id/messages`:
-
-| Event | Data |
-|-------|------|
-| `token` | `{ text }` |
-| `tool_call` | `{ name, input }` |
-| `tool_result` | `{ name, output }` |
-| `done` | `{ message_id }` |
-| `error` | `{ message }` |
