@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS pr_links (
-  session_id   TEXT PRIMARY KEY REFERENCES sessions(id),
+  session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   pr_number    INTEGER,
   pr_url       TEXT,
   artifact_url TEXT,
@@ -51,6 +51,56 @@ export class DB {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(SCHEMA);
+
+    // Migrate existing pr_links FK to have ON DELETE CASCADE.
+    // SQLite doesn't support ALTER TABLE on FK constraints, so we
+    // recreate pr_links via a temp table (safe: it's a single PK row per session).
+    this.fixPrLinksFk();
+  }
+
+  private fixPrLinksFk(): void {
+    // Check if the table already has CASCADE
+    const existing = this.db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='pr_links'`,
+    ).get() as { sql: string } | undefined;
+    if (!existing) return;
+    if (existing.sql.includes("ON DELETE CASCADE")) return;
+
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    this.db.exec("BEGIN IMMEDIATE");
+
+    // Copy pr_links data to a temp table
+    this.db.exec(`
+      CREATE TEMPORARY TABLE pr_links_bak (
+        session_id   TEXT PRIMARY KEY,
+        pr_number    INTEGER,
+        pr_url       TEXT,
+        artifact_url TEXT,
+        updated_at   TEXT NOT NULL
+      )
+    `);
+    this.db.exec(`INSERT INTO pr_links_bak SELECT * FROM pr_links`);
+
+    // Drop pr_links (sessions stays — they can be dropped/created together)
+    this.db.exec("DROP TABLE pr_links");
+
+    // Recreate pr_links with CASCADE FK
+    this.db.exec(`
+      CREATE TABLE pr_links (
+        session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        pr_number    INTEGER,
+        pr_url       TEXT,
+        artifact_url TEXT,
+        updated_at   TEXT NOT NULL
+      )
+    `);
+
+    // Restore data
+    this.db.exec("INSERT INTO pr_links SELECT * FROM pr_links_bak");
+    this.db.exec("DROP TABLE pr_links_bak");
+
+    this.db.exec("COMMIT");
+    this.db.exec("PRAGMA foreign_keys = ON");
   }
 
   // ---- sessions ----
